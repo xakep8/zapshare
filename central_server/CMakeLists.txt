@@ -27,15 +27,17 @@ if(NOT pqxx_FOUND)
       set(pqxx_FOUND TRUE)
     endif()
   elseif(UNIX)
-    # Linux: use system libraries
+    # Linux: use system libraries and also link libpq (PostgreSQL client library)
     find_library(PQXX_LIBRARY pqxx)
+    find_library(PQ_LIBRARY pq)
     find_path(PQXX_INCLUDE_DIR pqxx/pqxx)
 
-    if(PQXX_LIBRARY AND PQXX_INCLUDE_DIR)
+    if(PQXX_LIBRARY AND PQ_LIBRARY AND PQXX_INCLUDE_DIR)
       add_library(pqxx::pqxx UNKNOWN IMPORTED)
       set_target_properties(pqxx::pqxx PROPERTIES
         IMPORTED_LOCATION "${PQXX_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${PQXX_INCLUDE_DIR}")
+        INTERFACE_INCLUDE_DIRECTORIES "${PQXX_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES "${PQ_LIBRARY}")
       set(pqxx_FOUND TRUE)
     endif()
   endif()
