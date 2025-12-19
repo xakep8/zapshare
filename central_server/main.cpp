@@ -6,9 +6,7 @@
 #include "httplib.h"
 
 int main() {
-    if (!DB::connectDB()) {
-        return 1;
-    }
+    DB::init();
 
     httplib::Server svr;
     // httplib::SSLServer svr;
