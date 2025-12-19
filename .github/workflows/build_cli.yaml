@@ -44,7 +44,7 @@ jobs:
         run: make
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: cli_tool-${{ matrix.os }}
           path: cli_tool/out/bin/cli_tool
