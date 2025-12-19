@@ -9,17 +9,36 @@ set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
 find_package(pqxx CONFIG QUIET)
 
-set(PQXX_FALLBACK_INCLUDE "/opt/homebrew/opt/libpqxx/include")
-find_library(PQXX_FALLBACK_LIBRARY pqxx
-  HINTS "/opt/homebrew/opt/libpqxx/lib")
+# Platform-specific libpqxx handling
+if(NOT pqxx_FOUND)
+  if(APPLE)
+    # macOS with Homebrew: manual fallback
+    find_library(PQXX_FALLBACK_LIBRARY pqxx
+      HINTS "/opt/homebrew/opt/libpqxx/lib")
+    
+    find_path(PQXX_FALLBACK_INCLUDE pqxx/pqxx
+      HINTS "/opt/homebrew/opt/libpqxx/include")
 
-if(NOT pqxx_FOUND AND PQXX_FALLBACK_LIBRARY)
-  # Homebrew currently installs libpqxx without a CMake package; use a manual imported target.
-  add_library(pqxx::pqxx STATIC IMPORTED)
-  set_target_properties(pqxx::pqxx PROPERTIES
-    IMPORTED_LOCATION "${PQXX_FALLBACK_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${PQXX_FALLBACK_INCLUDE}")
-  set(pqxx_FOUND TRUE)
+    if(PQXX_FALLBACK_LIBRARY AND PQXX_FALLBACK_INCLUDE)
+      add_library(pqxx::pqxx STATIC IMPORTED)
+      set_target_properties(pqxx::pqxx PROPERTIES
+        IMPORTED_LOCATION "${PQXX_FALLBACK_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${PQXX_FALLBACK_INCLUDE}")
+      set(pqxx_FOUND TRUE)
+    endif()
+  elseif(UNIX)
+    # Linux: use system libraries
+    find_library(PQXX_LIBRARY pqxx)
+    find_path(PQXX_INCLUDE_DIR pqxx/pqxx)
+
+    if(PQXX_LIBRARY AND PQXX_INCLUDE_DIR)
+      add_library(pqxx::pqxx UNKNOWN IMPORTED)
+      set_target_properties(pqxx::pqxx PROPERTIES
+        IMPORTED_LOCATION "${PQXX_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${PQXX_INCLUDE_DIR}")
+      set(pqxx_FOUND TRUE)
+    endif()
+  endif()
 endif()
 
 add_executable(${PROJECT_NAME}
