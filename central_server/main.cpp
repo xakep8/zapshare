@@ -50,8 +50,8 @@ int main() {
         res.status = httplib::StatusCode::InternalServerError_500;
     });
 
-    svr.Post(R"(/lookup/(\w+))", [](const httplib::Request& req, httplib::Response& res) {
-        const std::string_view secret = req.matches[1];
+    svr.Get(R"(/lookup/(\w+))", [](const httplib::Request& req, httplib::Response& res) {
+        std::string secret = req.matches[1];
         res.set_content("Hello World!", "text/plain");
     });
 

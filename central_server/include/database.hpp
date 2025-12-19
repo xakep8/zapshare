@@ -21,6 +21,7 @@ void init() {
     if (!connection->is_open()) {
         throw std::runtime_error("Failed to open DB connection");
     }
+    std::cout << "Connected to Database Successfully!\n";
 }
 
 pqxx::connection& conn() {
