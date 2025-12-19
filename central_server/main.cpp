@@ -7,6 +7,7 @@
 
 int main() {
     DB::init();
+    DB::create_tables();
 
     httplib::Server svr;
     // httplib::SSLServer svr;
@@ -52,6 +53,7 @@ int main() {
 
     svr.Get(R"(/lookup/(\w+))", [](const httplib::Request& req, httplib::Response& res) {
         std::string secret = req.matches[1];
+        DB::lookup_transfer(secret);
         res.set_content("Hello World!", "text/plain");
     });
 
