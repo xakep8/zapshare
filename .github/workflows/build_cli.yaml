@@ -1,0 +1,50 @@
+name: Build CLI Tool
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'cli_tool/**'
+      - '.github/workflows/build_cli.yaml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'cli_tool/**'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+        include:
+          - os: ubuntu-latest
+            install_cmd: |
+              sudo apt-get update
+              sudo apt-get install -y libssl-dev
+          - os: macos-latest
+            install_cmd: |
+              brew install openssl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: ${{ matrix.install_cmd }}
+
+      - name: Create build directory
+        run: mkdir -p cli_tool/out
+
+      - name: Configure CMake
+        working-directory: cli_tool/out
+        run: cmake ..
+
+      - name: Build
+        working-directory: cli_tool/out
+        run: make
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: cli_tool-${{ matrix.os }}
+          path: cli_tool/out/bin/cli_tool

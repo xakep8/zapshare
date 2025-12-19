@@ -1,10 +1,15 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 
-#include <httplib.h>
-
 #include <iostream>
 
+#include "database.hpp"
+#include "httplib.h"
+
 int main() {
+    if (!DB::connectDB()) {
+        return 1;
+    }
+
     httplib::Server svr;
     // httplib::SSLServer svr;
 
@@ -47,7 +52,8 @@ int main() {
         res.status = httplib::StatusCode::InternalServerError_500;
     });
 
-    svr.Post("/lookup", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Post(R"(/lookup/(\w+))", [](const httplib::Request& req, httplib::Response& res) {
+        const std::string_view secret = req.matches[1];
         res.set_content("Hello World!", "text/plain");
     });
 
