@@ -21,7 +21,7 @@ jobs:
           - os: ubuntu-latest
             install_cmd: |
               sudo apt-get update
-              sudo apt-get install -y libpqxx-dev libssl-dev
+              sudo apt-get install -y libpqxx-dev libpq-dev libssl-dev
           - os: macos-latest
             install_cmd: |
               brew install libpqxx openssl

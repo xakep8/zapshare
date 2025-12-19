@@ -48,12 +48,11 @@ add_executable(${PROJECT_NAME}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE include)
-target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 if(TARGET pqxx::pqxx)
-  target_link_libraries(${PROJECT_NAME} PRIVATE pqxx::pqxx)
+  target_link_libraries(${PROJECT_NAME} PRIVATE pqxx::pqxx OpenSSL::SSL OpenSSL::Crypto)
 elseif(pqxx_FOUND)
-  target_link_libraries(${PROJECT_NAME} PRIVATE pqxx)
+  target_link_libraries(${PROJECT_NAME} PRIVATE pqxx OpenSSL::SSL OpenSSL::Crypto)
 else()
   message(FATAL_ERROR "libpqxx not found: install via Homebrew (brew install libpqxx) or set pqxx_DIR")
 endif()
