@@ -4,6 +4,9 @@
 
 #include "database.hpp"
 #include "httplib.h"
+#include "json.hpp"
+
+using json = nlohmann::json;
 
 int main() {
     DB::init();
@@ -53,8 +56,8 @@ int main() {
 
     svr.Get(R"(/lookup/(\w+))", [](const httplib::Request& req, httplib::Response& res) {
         std::string secret = req.matches[1];
-        DB::lookup_transfer(secret);
-        res.set_content("Hello World!", "text/plain");
+        std::string result = DB::lookup_transfer(secret) ? "True" : "False";
+        res.set_content(result, "text/plain");
     });
 
     svr.Get("/", [](const httplib::Request& req, httplib::Response& res) {

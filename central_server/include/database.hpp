@@ -109,17 +109,16 @@ void print_transfer(const TransferRow& t) {
     std::cout << "created_at: " << t.created_at << "\n";
 }
 
-void lookup_transfer(const std::string_view secret) {
+bool lookup_transfer(const std::string_view secret) {
     pqxx::read_transaction txn(conn());
 
     try {
         pqxx::result r = txn.exec_params("SELECT * FROM transfers WHERE id = $1", std::string(secret));
 
-        for (const auto& row : r) {
-            print_transfer(to_transfer_row(row));
-        }
+        return !r.empty();
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
+        return false;
     }
 }
 
