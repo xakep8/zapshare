@@ -60,8 +60,31 @@ int main() {
         res.set_content(result, "text/plain");
     });
 
-    svr.Get("/", [](const httplib::Request& req, httplib::Response& res) {
-        res.set_content("You've come to right place!", "text/plain");
+    svr.Get(R"(/getfile/(\w+))", [](const httplib::Request& req, httplib::Response& res) {
+        std::string secret = req.matches[1];
+        try {
+            DB::TransferRow row = DB::get_transfers_metadata(secret);
+            std::string data = DB::transfer_row_to_json(row).dump();
+            res.set_content(data, "application/json");
+            res.status = httplib::StatusCode::OK_200;
+        } catch (std::exception& e) {
+            std::cerr << "Error: " << e.what() << "\n";
+        }
+    });
+
+    svr.Post("/register", [](const httplib::Request& req, httplib::Response& res) {
+        try {
+            json data = json::parse(req.body);
+            DB::register_transfers(data);
+            res.status = httplib::StatusCode::Created_201;
+        } catch (std::exception& e) {
+            std::cerr << "Error: " << e.what() << "\n";
+        }
+    });
+
+    svr.Get("/health", [](const httplib::Request& req, httplib::Response& res) {
+        res.set_content("Your Server is healthy and running just fine brother!\nYou've come to right place!",
+                        "text/plain");
     });
 
     svr.listen("0.0.0.0", 3000);

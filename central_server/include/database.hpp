@@ -3,6 +3,10 @@
 #include <iostream>
 #include <pqxx/pqxx>
 
+#include "json.hpp"
+
+using json = nlohmann::json;
+
 namespace DB {
 
 typedef struct Transfer_Payload {
@@ -55,6 +59,7 @@ pqxx::connection& conn() {
     }
     return *connection;
 }
+
 void create_transfers_table() {
     pqxx::work txn(conn());
 
@@ -96,6 +101,37 @@ TransferRow to_transfer_row(const pqxx::row& row) {
     return t;
 }
 
+inline json transfer_row_to_json(const TransferRow& t) {
+    return json{{"id", t.id},
+                {"sender_ip", t.sender_ip},
+                {"sender_port", t.sender_port},
+                {"protocol", t.protocol},
+                {"file_name", t.file_name},
+                {"file_size", t.file_size},
+                {"file_hash", t.file_hash},
+                {"token", t.token},
+                {"claimed", t.claimed},
+                {"created_at", t.created_at}};
+}
+
+inline TRANSFERS transfer_row_from_json(const json& data) {
+    try {
+        TRANSFERS t;
+        t.id = data["id"];
+        t.sender_ip = data["sender_ip"];
+        t.sender_port = data["sender_port"];
+        t.protocol = data["protocol"];
+        t.file_name = data["file_name"];
+        t.file_size = data["file_size"];
+        t.file_hash = data["file_hash"];
+        t.token = data["token"];
+        return t;
+    } catch (std::exception& e) {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        throw std::runtime_error(e.what());
+    }
+}
+
 void print_transfer(const TransferRow& t) {
     std::cout << "id: " << t.id << "\n";
     std::cout << "sender_ip: " << t.sender_ip << "\n";
@@ -122,13 +158,24 @@ bool lookup_transfer(const std::string_view secret) {
     }
 }
 
-void get_transfers_metadata(const std::string_view secret) {}
+TransferRow get_transfers_metadata(const std::string_view secret) {
+    pqxx::read_transaction txn(conn());
 
-void register_transfers(const TRANSFERS payload) {
+    try {
+        pqxx::result r = txn.exec_params("SELECT * FROM transfers WHERE id = $1", std::string(secret));
+        TransferRow data = to_transfer_row(r[0]);
+        return data;
+    } catch (std::exception& e) {
+        throw std::runtime_error(e.what());
+    }
+}
+
+bool register_transfers(const json data) {
     pqxx::work txn(conn());
-
-    txn.exec_params(
-        R"(
+    try {
+        TRANSFERS payload = transfer_row_from_json(data);
+        txn.exec_params(
+            R"(
             INSERT INTO transfers (
                 id,
                 sender_ip,
@@ -148,9 +195,13 @@ void register_transfers(const TRANSFERS payload) {
                 file_hash = EXCLUDED.file_hash,
                 token = EXCLUDED.token
         )",
-        payload.id, payload.sender_ip, payload.sender_port, payload.protocol, payload.file_name, payload.file_size,
-        payload.file_hash, payload.token);
+            payload.id, payload.sender_ip, payload.sender_port, payload.protocol, payload.file_name, payload.file_size,
+            payload.file_hash, payload.token);
 
-    txn.commit();
+        txn.commit();
+    } catch (std::exception& e) {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        throw std::runtime_error(e.what());
+    }
 }
 }  // namespace DB
