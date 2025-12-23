@@ -31,12 +31,15 @@ if(NOT asio_POPULATED)
 endif()
 # ----------------------------------------------------------------------
 
+set(OPENSSL_USE_STATIC_LIBS TRUE)
+find_package(OpenSSL REQUIRED)
+
 add_executable(${PROJECT_NAME}
   src/server.cpp
   main.cpp
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE asio)
+target_link_libraries(${PROJECT_NAME} PRIVATE asio OpenSSL::SSL OpenSSL::Crypto)
 
 target_include_directories(${PROJECT_NAME} PRIVATE include)
 

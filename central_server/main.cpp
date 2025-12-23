@@ -1,6 +1,7 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 
 #include <iostream>
+#include <thread>
 
 #include "database.hpp"
 #include "httplib.h"
@@ -87,6 +88,13 @@ int main() {
                         "text/plain");
     });
 
+    // Enable thread pool for concurrent request handling
+    int num_threads = std::max(2, static_cast<int>(std::thread::hardware_concurrency()));
+    svr.new_task_queue = [num_threads] {
+        return new httplib::ThreadPool(num_threads);
+    };
+
+    std::cout << "Server listening on 0.0.0.0:3000 with " << num_threads << " worker threads" << std::endl;
     svr.listen("0.0.0.0", 3000);
     return 0;
 }

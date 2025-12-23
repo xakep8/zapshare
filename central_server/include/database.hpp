@@ -158,12 +158,26 @@ bool lookup_transfer(const std::string_view secret) {
     }
 }
 
+void mark_transfer_claimed(const std::string_view secret) {
+    pqxx::work txn(conn());
+    try {
+        txn.exec_params("UPDATE transfers SET claimed = true WHERE id = $1", std::string(secret));
+        txn.commit();
+    } catch (std::exception& e) {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        throw std::runtime_error(e.what());
+    }
+}
+
 TransferRow get_transfers_metadata(const std::string_view secret) {
     pqxx::read_transaction txn(conn());
 
     try {
         pqxx::result r = txn.exec_params("SELECT * FROM transfers WHERE id = $1", std::string(secret));
+        txn.commit();
+        mark_transfer_claimed(secret);
         TransferRow data = to_transfer_row(r[0]);
+        data.claimed = true;
         return data;
     } catch (std::exception& e) {
         throw std::runtime_error(e.what());

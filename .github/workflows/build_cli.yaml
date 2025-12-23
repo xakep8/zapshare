@@ -2,7 +2,7 @@ name: Build CLI Tool
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
     paths:
       - 'cli_tool/**'
       - '.github/workflows/build_cli.yaml'
