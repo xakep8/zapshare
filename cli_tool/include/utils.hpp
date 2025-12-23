@@ -4,24 +4,24 @@
 #include <iostream>
 
 namespace Error {
-void printUsage() { std::cerr << "usage:\n" << "    zapshare send [filepath]\n" << "    zapshare get [secret]\n"; }
+void print_usage() { std::cerr << "usage:\n" << "    zapshare send [filepath]\n" << "    zapshare get [secret]\n"; }
 
-void invalidSecret() {
+void invalid_secret() {
     std::cerr << "Invalid secret!\n";
-    printUsage();
+    print_usage();
 }
 
-void invalidFilePath() {
+void invalid_file_path() {
     std::cerr << "Invalid filepath!\n";
-    printUsage();
+    print_usage();
 }
 }  // namespace Error
 
 namespace Utils {
-bool checkFileExists(const std::string_view filepath) {
+bool check_file_exists(const std::string_view filepath) {
     std::filesystem::path file{filepath};
     return std::filesystem::exists(file);
 }
 
-bool lookUp(const std::string_view secret) { return false; }
+bool look_up(const std::string_view secret) { return false; }
 }  // namespace Utils

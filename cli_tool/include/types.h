@@ -15,3 +15,7 @@ namespace Command {
 inline constexpr std::string_view SEND = "send";
 inline constexpr std::string_view GET = "get";
 }  // namespace Command
+
+namespace Messages {
+inline constexpr std::string_view HELLO = "HELLO";
+}

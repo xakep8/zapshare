@@ -4,37 +4,37 @@
 #include "types.h"
 #include "utils.hpp"
 
-void startServer() {
+void start_server() {
     asio::io_context io;
     Server s(io, 5173);
     io.run();
 }
 
-void startClient() {}
+void start_client() {}
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        Error::printUsage();
+        Error::print_usage();
     }
     const std::string_view cmd = argv[1];
     if (cmd == Command::SEND) {
         if (argc < 3) {
-            Error::invalidFilePath();
+            Error::invalid_file_path();
         }
         const std::string_view filepath = argv[2];
-        if (!Utils::checkFileExists(filepath)) {
-            Error::invalidFilePath();
+        if (!Utils::check_file_exists(filepath)) {
+            Error::invalid_file_path();
         }
     } else if (cmd == Command::GET) {
         if (argc < 3) {
-            Error::invalidSecret();
+            Error::invalid_secret();
         }
         const std::string_view secret = argv[2];
-        if (!Utils::lookUp(secret)) {
+        if (!Utils::look_up(secret)) {
         }
     } else {
         std::cerr << "Invalid Command!\n";
-        Error::printUsage();
+        Error::print_usage();
     }
     return 0;
 }

@@ -14,7 +14,7 @@ class Server {
     void do_accept();
 
    public:
-    bool isInitialize() const { return m_Initialized; }
+    bool is_Initialized() const { return m_Initialized; }
     ~Server();
     Server(asio::io_context& io_context, short port);
 };
