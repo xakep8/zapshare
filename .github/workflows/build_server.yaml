@@ -2,7 +2,7 @@ name: Build Central Server
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
     paths:
       - 'central_server/**'
       - '.github/workflows/build_server.yaml'
