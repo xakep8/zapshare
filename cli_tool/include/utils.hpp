@@ -73,7 +73,10 @@ TRANSFERS get_transfer_metadata(const std::string_view& secret) {
     throw std::runtime_error("[GET TRANSFER METADATA] Error getting metadata for the transfer");
 }
 
-std::string get_connection_details() { return ""; }
+std::string get_connection_details() {
+    // TODO: Implement retrieval of connection details (e.g., host, port, protocol) instead of returning a stub value.
+    return "";
+}
 }  // namespace Utils
 
 namespace Crypto {
