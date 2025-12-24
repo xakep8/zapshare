@@ -10,7 +10,7 @@ void start_server() {
     io.run();
 }
 
-void start_client(const int& port) {
+void start_client() {
     using asio::ip::tcp;
     asio::io_context io_context;
 
