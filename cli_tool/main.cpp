@@ -10,7 +10,7 @@ void start_server() {
     io.run();
 }
 
-void start_client() {
+void start_client(const int& port) {
     using asio::ip::tcp;
     asio::io_context io_context;
 
@@ -50,6 +50,9 @@ int main(int argc, char* argv[]) {
             Error::invalid_file_path();
             return 1;
         }
+        const std::string file_name = std::filesystem::path(filepath).filename().string();
+        const std::string file_hash = Crypto::compute_file_hash(filepath);
+        const int port = 25000;
     } else if (cmd == Command::GET) {
         if (argc < 3) {
             Error::invalid_secret();
