@@ -1,6 +1,8 @@
 #pragma once
 
 #include <asio.hpp>
+#include <iostream>
+#include <string>
 
 class Session : public std::enable_shared_from_this<Session> {
    public:
@@ -26,7 +28,6 @@ class Session : public std::enable_shared_from_this<Session> {
                 wait_for_request();
             } else {
                 std::cout << "error: " << ec << std::endl;
-                ;
             }
         });
     }

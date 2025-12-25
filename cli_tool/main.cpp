@@ -19,7 +19,7 @@ void start_client() {
     tcp::resolver resolver(io_context);
 
     // now we can use connect(..)
-    asio::connect(socket, resolver.resolve("127.0.0.1", "25000"));
+    asio::connect(socket, resolver.resolve("127.0.0.1", "5173"));
     while (true) {
         std::string data{"some client data ..."};
         auto result = asio::write(socket, asio::buffer(data));

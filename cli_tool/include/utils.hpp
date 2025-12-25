@@ -80,6 +80,8 @@ std::string get_connection_details() {
 }  // namespace Utils
 
 namespace Crypto {
+std::string generate_token() {}
+
 std::string compute_file_hash(const std::string_view& path) {
     std::ifstream file(std::string(path), std::ifstream::binary);
     if (!file.is_open()) {
