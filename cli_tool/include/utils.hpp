@@ -16,14 +16,16 @@
 using json = nlohmann::json;
 
 namespace Error {
-void print_usage() { std::cerr << "usage:\n" << "    zapshare send [filepath]\n" << "    zapshare get [secret]\n"; }
+inline void print_usage() {
+    std::cerr << "usage:\n" << "    zapshare send [filepath]\n" << "    zapshare get [secret]\n";
+}
 
-void invalid_secret() {
+inline void invalid_secret() {
     std::cerr << "Invalid secret!\n";
     print_usage();
 }
 
-void invalid_file_path() {
+inline void invalid_file_path() {
     std::cerr << "Invalid filepath!\n";
     print_usage();
 }
@@ -48,12 +50,12 @@ inline TRANSFERS transfer_metadata_from_json(const json& data) {
     }
 }
 
-bool check_file_exists(const std::string_view& filepath) {
+inline bool check_file_exists(const std::string_view& filepath) {
     std::filesystem::path file{filepath};
     return std::filesystem::exists(file);
 }
 
-bool look_up(const std::string_view secret) {
+inline bool look_up(const std::string_view secret) {
     httplib::Client client("http://127.0.0.1:3000");
     const std::string url = "/lookup/" + std::string(secret);
     if (auto res = client.Get(url)) {
@@ -64,7 +66,7 @@ bool look_up(const std::string_view secret) {
     return false;
 }
 
-TRANSFERS get_transfer_metadata(const std::string_view& secret) {
+inline TRANSFERS get_transfer_metadata(const std::string_view& secret) {
     httplib::Client client("http://127.0.0.1:3000");
     const std::string url = "/getfile/" + std::string(secret);
     if (auto res = client.Get(url)) {
@@ -73,16 +75,16 @@ TRANSFERS get_transfer_metadata(const std::string_view& secret) {
     throw std::runtime_error("[GET TRANSFER METADATA] Error getting metadata for the transfer");
 }
 
-std::string get_connection_details() {
+inline std::string get_connection_details() {
     // TODO: Implement retrieval of connection details (e.g., host, port, protocol) instead of returning a stub value.
     return "";
 }
 }  // namespace Utils
 
 namespace Crypto {
-std::string generate_token() {}
+inline std::string generate_token() {}
 
-std::string compute_file_hash(const std::string_view& path) {
+inline std::string compute_file_hash(const std::string_view& path) {
     std::ifstream file(std::string(path), std::ifstream::binary);
     if (!file.is_open()) {
         throw std::runtime_error("[CRYPTO] Error opening file: ");

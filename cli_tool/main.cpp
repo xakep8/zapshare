@@ -52,7 +52,8 @@ int main(int argc, char* argv[]) {
         }
         const std::string file_name = std::filesystem::path(filepath).filename().string();
         const std::string file_hash = Crypto::compute_file_hash(filepath);
-        const int port = 25000;
+        const std::string token = "";
+        start_server();
     } else if (cmd == Command::GET) {
         if (argc < 3) {
             Error::invalid_secret();
