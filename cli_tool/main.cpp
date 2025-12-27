@@ -19,7 +19,7 @@ void start_client() {
     tcp::resolver resolver(io_context);
 
     // now we can use connect(..)
-    asio::connect(socket, resolver.resolve("127.0.0.1", "25000"));
+    asio::connect(socket, resolver.resolve("127.0.0.1", "5173"));
     while (true) {
         std::string data{"some client data ..."};
         auto result = asio::write(socket, asio::buffer(data));
@@ -50,6 +50,10 @@ int main(int argc, char* argv[]) {
             Error::invalid_file_path();
             return 1;
         }
+        const std::string file_name = std::filesystem::path(filepath).filename().string();
+        const std::string file_hash = Crypto::compute_file_hash(filepath);
+        const std::string token = "";
+        start_server();
     } else if (cmd == Command::GET) {
         if (argc < 3) {
             Error::invalid_secret();
