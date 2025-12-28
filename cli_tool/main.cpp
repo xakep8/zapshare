@@ -1,5 +1,6 @@
 #include <iostream>
 
+#include "asio.hpp"
 #include "server.hpp"
 #include "types.h"
 #include "utils.hpp"
@@ -50,9 +51,28 @@ int main(int argc, char* argv[]) {
             Error::invalid_file_path();
             return 1;
         }
-        const std::string file_name = std::filesystem::path(filepath).filename().string();
-        const std::string file_hash = Crypto::compute_file_hash(filepath);
-        const std::string token = "";
+        TRANSFERS transfer{};
+        transfer.file_name = std::filesystem::path(filepath).filename().string();
+        transfer.file_hash = Crypto::compute_file_hash(filepath);
+        transfer.file_size = std::filesystem::file_size(filepath);
+        transfer.protocol = "tcp";
+        transfer.sender_ip = Utils::get_local_ip_address();
+        transfer.token = "";
+        
+        // Discover public endpoint via STUN
+        try {
+            PublicEndpoint public_ep = Utils::get_public_endpoint();
+            transfer.sender_ip = public_ep.ip;
+            transfer.sender_port = public_ep.port;
+            std::cout << "Public endpoint: " << public_ep.ip << ":" << public_ep.port << std::endl;
+            // Register with central server (token will be returned/used)
+            // Utils::register_public_endpoint(transfer.token, public_ep);
+        } catch (const std::exception& e) {
+            std::cerr << "NAT traversal failed: " << e.what() << std::endl;
+            return 1;
+        }
+        
+        // Start server to accept incoming peer connection
         start_server();
     } else if (cmd == Command::GET) {
         if (argc < 3) {
@@ -64,7 +84,31 @@ int main(int argc, char* argv[]) {
             Error::invalid_file_path();
             return 1;
         }
-        Transfer_Metadata data = Utils::get_transfer_metadata(secret);
+        TRANSFERS peer_transfer = Utils::get_transfer_metadata(secret);
+        
+        // Discover our own public endpoint
+        try {
+            PublicEndpoint our_public_ep = Utils::get_public_endpoint();
+            std::cout << "Our public endpoint: " << our_public_ep.ip << ":" << our_public_ep.port << std::endl;
+            // TODO: Register our endpoint with central server so peer can reach us
+            // Utils::register_public_endpoint(secret, our_public_ep);
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to discover public endpoint: " << e.what() << std::endl;
+            return 1;
+        }
+        
+        // Perform UDP hole punching to peer's public endpoint
+        try {
+            PublicEndpoint peer_ep{peer_transfer.sender_ip, static_cast<uint16_t>(peer_transfer.sender_port)};
+            asio::io_context io_ctx;
+            auto hole_punch_socket = Utils::perform_udp_hole_punch(io_ctx, peer_ep);
+            std::cout << "NAT traversal successful, hole punch socket ready" << std::endl;
+            // Now switch to TCP or use the hole-punched UDP socket for data transfer
+        } catch (const std::exception& e) {
+            std::cerr << "NAT traversal hole punching failed: " << e.what() << std::endl;
+            return 1;
+        }
+        
         start_client();
     } else {
         std::cerr << "Invalid Command!\n";
