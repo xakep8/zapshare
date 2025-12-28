@@ -1,6 +1,7 @@
+#include "server.hpp"
+
 #include <iostream>
 
-#include "server.hpp"
 #include "session.hpp"
 
 Server::Server(asio::io_context& io_context, short port)
@@ -11,6 +12,7 @@ Server::Server(asio::io_context& io_context, short port)
 Server::~Server() { std::cout << "Destrutor\n"; }
 
 void Server::do_accept() {
+    m_Initialized = true;
     m_acceptor.async_accept([this](asio::error_code ec, tcp::socket socket) {
         if (!ec) {
             std::cout << "Creating Session on: " << socket.remote_endpoint().address().to_string() << ":"
