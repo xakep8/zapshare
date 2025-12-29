@@ -17,8 +17,8 @@ using asio::ip::tcp;
 enum class State { WaitingHello, Authenticated, Transferring, Closed };
 
 class Session : public std::enable_shared_from_this<Session> {
-   public:
-    Session(tcp::socket socket) : m_socket(std::move(socket)) {}
+    public:
+     Session(tcp::socket socket, const std::string& file_path) : m_socket(std::move(socket)), m_file_path(file_path) {}
 
     void run() { wait_for_request(); }
 
@@ -100,9 +100,9 @@ class Session : public std::enable_shared_from_this<Session> {
             }
         } else if (m_state == State::Authenticated) {
             if (cmd == Message::Get) {
-                // Use file_name from validated transfer metadata, not from client
-                m_file_id = m_transfer_metadata.file_name;
-                m_file = std::ifstream(m_file_id, std::ifstream::binary);
+                // Use validated metadata and the provided file path on sender side
+                m_file_id = m_transfer_metadata.id.empty() ? m_transfer_metadata.file_name : m_transfer_metadata.id;
+                m_file = std::ifstream(m_file_path, std::ifstream::binary);
                 if (!m_file.is_open()) {
                     send_response("FAIL\n");
                     close_connection();
@@ -139,4 +139,5 @@ class Session : public std::enable_shared_from_this<Session> {
     std::array<char, 8192> m_chunk{};
     size_t m_offset = 0;
     TRANSFERS m_transfer_metadata{};
+    std::string m_file_path;
 };

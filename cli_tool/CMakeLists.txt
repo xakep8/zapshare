@@ -35,6 +35,7 @@ set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
 
 add_executable(${PROJECT_NAME}
+  src/client.cpp
   src/server.cpp
   main.cpp
 )
