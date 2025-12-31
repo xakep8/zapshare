@@ -11,22 +11,26 @@ using asio::ip::tcp;
 
 bool run_client_session(const std::string& host, uint16_t port, const std::string& token, const std::string& output_filename) {
     try {
+        std::cout << "Connecting to " << host << ":" << port << "..." << std::endl;
         asio::io_context io;
         tcp::resolver resolver(io);
         tcp::socket socket(io);
         asio::connect(socket, resolver.resolve(host, std::to_string(port)));
+        std::cout << "Connected successfully" << std::endl;
 
         asio::streambuf buf;
         auto write_line = [&](const std::string& line) {
-            std::string msg = line;
-            asio::write(socket, asio::buffer(msg));
+            std::cout << "Sending: " << line;
+            asio::write(socket, asio::buffer(line));
         };
 
         auto read_line = [&]() -> std::string {
+            std::cout << "Reading response..." << std::endl;
             asio::read_until(socket, buf, "\n");
             std::istream is(&buf);
             std::string line;
             std::getline(is, line);
+            std::cout << "Received: " << line << std::endl;
             return line;
         };
 
@@ -50,6 +54,7 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
         while (true) {
             std::string header = read_line();
             if (header == "DONE") {
+                std::cout << "Transfer complete" << std::endl;
                 break;
             }
             std::istringstream iss(header);
@@ -62,13 +67,30 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
                 return false;
             }
 
+            std::cout << "Receiving chunk: offset=" << offset << " length=" << length << std::endl;
             std::vector<char> chunk(length);
-            asio::read(socket, asio::buffer(chunk.data(), length));
+            
+            // First, consume any data already buffered from read_until
+            size_t buffered = buf.size();
+            size_t to_copy_from_buf = std::min(buffered, length);
+            if (to_copy_from_buf > 0) {
+                std::cout << "Copying " << to_copy_from_buf << " bytes from buffer" << std::endl;
+                std::istream is(&buf);
+                is.read(chunk.data(), to_copy_from_buf);
+            }
+            
+            // Then read the rest directly from socket if needed
+            size_t remaining = length - to_copy_from_buf;
+            if (remaining > 0) {
+                std::cout << "Reading " << remaining << " more bytes from socket" << std::endl;
+                asio::read(socket, asio::buffer(chunk.data() + to_copy_from_buf, remaining));
+            }
 
             out.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
             out.write(chunk.data(), static_cast<std::streamsize>(length));
         }
         out.close();
+        std::cout << "File saved: " << output_filename << std::endl;
         return true;
     } catch (const std::exception& e) {
         std::cerr << "Client error: " << e.what() << std::endl;
