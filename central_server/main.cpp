@@ -55,13 +55,14 @@ int main() {
         res.status = httplib::StatusCode::InternalServerError_500;
     });
 
-    svr.Get(R"(/lookup/(\w+))", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get(R"(/lookup/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
         std::string secret = req.matches[1];
+        std::cout << secret << std::endl;
         std::string result = DB::lookup_transfer(secret) ? "True" : "False";
         res.set_content(result, "text/plain");
     });
 
-    svr.Get(R"(/getfile/(\w+))", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get(R"(/getfile/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
         std::string secret = req.matches[1];
         try {
             DB::TransferRow row = DB::get_transfers_metadata(secret);
@@ -90,9 +91,7 @@ int main() {
 
     // Enable thread pool for concurrent request handling
     int num_threads = std::max(2, static_cast<int>(std::thread::hardware_concurrency()));
-    svr.new_task_queue = [num_threads] {
-        return new httplib::ThreadPool(num_threads);
-    };
+    svr.new_task_queue = [num_threads] { return new httplib::ThreadPool(num_threads); };
 
     std::cout << "Server listening on 0.0.0.0:3000 with " << num_threads << " worker threads" << std::endl;
     svr.listen("0.0.0.0", 3000);

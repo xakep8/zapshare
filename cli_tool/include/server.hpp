@@ -9,6 +9,7 @@ class Server {
    private:
     bool m_Initialized;
     tcp::acceptor m_acceptor;
+    std::string m_file_path;
 
    private:
     void do_accept();
@@ -16,5 +17,5 @@ class Server {
    public:
     bool is_Initialized() const { return m_Initialized; }
     ~Server();
-    Server(asio::io_context& io_context, short port);
+    Server(asio::io_context& io_context, short port, const std::string& file_path);
 };

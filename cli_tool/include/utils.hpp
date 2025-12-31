@@ -1,17 +1,15 @@
 #pragma once
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 
-#include <openssl/sha.h>
-
+#include <asio.hpp>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <string>
-#include <asio.hpp>
-#include <thread>
-#include <chrono>
 #include <random>
+#include <string>
+#include <thread>
 
 #include "httplib.h"
 #include "json.hpp"
@@ -24,22 +22,6 @@ struct PublicEndpoint {
     std::string ip;
     uint16_t port;
 };
-
-namespace Error {
-inline void print_usage() {
-    std::cerr << "usage:\n" << "    zapshare send [filepath]\n" << "    zapshare get [secret]\n";
-}
-
-inline void invalid_secret() {
-    std::cerr << "Invalid secret!\n";
-    print_usage();
-}
-
-inline void invalid_file_path() {
-    std::cerr << "Invalid filepath!\n";
-    print_usage();
-}
-}  // namespace Error
 
 namespace Utils {
 inline TRANSFERS transfer_metadata_from_json(const json& data) {
@@ -103,7 +85,8 @@ inline std::string get_local_ip_address() {
     }
 }
 // Discover public IP:port via STUN (XOR-MAPPED-ADDRESS)
-inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun.l.google.com", uint16_t stun_port = 19302) {
+inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun.l.google.com",
+                                          uint16_t stun_port = 19302) {
     try {
         asio::io_context io_ctx;
         ip::udp::resolver resolver(io_ctx);
@@ -115,10 +98,17 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 
         // STUN Binding Request
         std::array<uint8_t, 20> request{};
-        request[0] = 0x00; request[1] = 0x01; // Binding Request
-        request[2] = 0x00; request[3] = 0x00; // Length = 0
-        request[4] = 0x21; request[5] = 0x12; request[6] = 0xA4; request[7] = 0x42; // Magic Cookie
-        std::random_device rd; std::mt19937 gen(rd()); std::uniform_int_distribution<> dis(0, 255);
+        request[0] = 0x00;
+        request[1] = 0x01;  // Binding Request
+        request[2] = 0x00;
+        request[3] = 0x00;  // Length = 0
+        request[4] = 0x21;
+        request[5] = 0x12;
+        request[6] = 0xA4;
+        request[7] = 0x42;  // Magic Cookie
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, 255);
         for (int i = 8; i < 20; ++i) request[i] = static_cast<uint8_t>(dis(gen));
 
         socket.send_to(asio::buffer(request), stun_endpoint);
@@ -129,13 +119,13 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 
         // Parse XOR-MAPPED-ADDRESS (0x0020)
         const uint32_t MAGIC_COOKIE = 0x2112A442;
-        for (size_t i = 20; i + 8 <= len; ) {
+        for (size_t i = 20; i + 8 <= len;) {
             uint16_t attr_type = (response[i] << 8) | response[i + 1];
-            uint16_t attr_len  = (response[i + 2] << 8) | response[i + 3];
+            uint16_t attr_len = (response[i + 2] << 8) | response[i + 3];
             size_t attr_start = i + 4;
             if (attr_type == 0x0020 && attr_len >= 8) {
                 uint8_t family = response[attr_start + 1];
-                if (family == 0x01) { // IPv4
+                if (family == 0x01) {  // IPv4
                     uint16_t xport = (response[attr_start + 2] << 8) | response[attr_start + 3];
                     uint32_t xaddr = (response[attr_start + 4] << 24) | (response[attr_start + 5] << 16) |
                                      (response[attr_start + 6] << 8) | response[attr_start + 7];
@@ -143,8 +133,7 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
                     uint32_t addr = xaddr ^ MAGIC_COOKIE;
                     std::string ip_str = std::to_string((addr >> 24) & 0xFF) + "." +
                                          std::to_string((addr >> 16) & 0xFF) + "." +
-                                         std::to_string((addr >> 8) & 0xFF) + "." +
-                                         std::to_string(addr & 0xFF);
+                                         std::to_string((addr >> 8) & 0xFF) + "." + std::to_string(addr & 0xFF);
                     return PublicEndpoint{ip_str, port};
                 }
             }
@@ -162,11 +151,7 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 // Register discovered public endpoint with central server
 inline void register_public_endpoint(const std::string& token, const PublicEndpoint& endpoint) {
     httplib::Client client("http://127.0.0.1:3000");
-    json payload = {
-        {"token", token},
-        {"public_ip", endpoint.ip},
-        {"public_port", endpoint.port}
-    };
+    json payload = {{"token", token}, {"public_ip", endpoint.ip}, {"public_port", endpoint.port}};
     client.Post("/register_endpoint", payload.dump(), "application/json");
 }
 
@@ -180,38 +165,46 @@ inline ip::udp::socket perform_udp_hole_punch(asio::io_context& io_ctx, const Pu
         socket.send_to(asio::buffer(punch_msg), peer);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    return socket; // moved out (non-copyable)
+    return socket;  // moved out (non-copyable)
+}
+
+// Generate a UUID v4 token (RFC 4122) using std::random_device
+inline std::string generate_uuid_token() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint32_t> dis32(0, 0xFFFFFFFF);
+    auto rnd32 = [&]() { return dis32(gen); };
+
+    uint32_t d0 = rnd32();
+    uint16_t d1 = static_cast<uint16_t>(rnd32() & 0xFFFF);
+    uint16_t d2 = static_cast<uint16_t>((rnd32() & 0x0FFF) | 0x4000); // version 4
+    uint16_t d3 = static_cast<uint16_t>((rnd32() & 0x3FFF) | 0x8000); // variant 10xxxxxx
+    uint64_t d4_hi = rnd32();
+    uint64_t d4_lo = rnd32();
+
+    std::ostringstream oss;
+    oss << std::hex << std::nouppercase << std::setfill('0')
+        << std::setw(8) << d0 << "-"
+        << std::setw(4) << d1 << "-"
+        << std::setw(4) << d2 << "-"
+        << std::setw(4) << d3 << "-"
+        << std::setw(8) << static_cast<uint32_t>(d4_hi) << std::setw(8) << static_cast<uint32_t>(d4_lo);
+    return oss.str();
+}
+
+// Register transfer metadata with rendezvous server
+inline void register_transfer(const TRANSFERS& t) {
+    httplib::Client client("http://127.0.0.1:3000");
+    json payload = {
+        {"id", t.id},
+        {"sender_ip", t.sender_ip},
+        {"sender_port", t.sender_port},
+        {"protocol", t.protocol},
+        {"file_name", t.file_name},
+        {"file_size", t.file_size},
+        {"file_hash", t.file_hash},
+        {"token", t.token}
+    };
+    client.Post("/register", payload.dump(), "application/json");
 }
 }  // namespace Utils
-
-namespace Crypto {
-inline std::string generate_token() {}
-
-inline std::string compute_file_hash(const std::string_view& path) {
-    std::ifstream file(std::string(path), std::ifstream::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("[CRYPTO] Error opening file: ");
-    }
-    SHA256_CTX sha256_context;
-    SHA256_Init(&sha256_context);
-    const int buffer_size = 4096;
-    unsigned char buffer[buffer_size];
-    while (file.read(reinterpret_cast<char*>(buffer), buffer_size)) {
-        SHA256_Update(&sha256_context, buffer, file.gcount());
-    }
-
-    if (file.gcount() > 0) {
-        SHA256_Update(&sha256_context, buffer, file.gcount());
-    }
-
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_Final(hash, &sha256_context);
-    file.close();
-
-    std::stringstream ss;
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash[i]);
-    }
-    return ss.str();
-}
-}  // namespace Crypto

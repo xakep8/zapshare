@@ -4,8 +4,8 @@
 
 #include "session.hpp"
 
-Server::Server(asio::io_context& io_context, short port)
-    : m_Initialized(false), m_acceptor(io_context, tcp::endpoint(tcp::v4(), port)) {
+Server::Server(asio::io_context& io_context, short port, const std::string& file_path)
+    : m_Initialized(false), m_acceptor(io_context, tcp::endpoint(tcp::v4(), port)), m_file_path(file_path) {
     do_accept();
 }
 
@@ -17,7 +17,7 @@ void Server::do_accept() {
         if (!ec) {
             std::cout << "Creating Session on: " << socket.remote_endpoint().address().to_string() << ":"
                       << socket.remote_endpoint().port() << "\n";
-            std::make_shared<Session>(std::move(socket))->run();
+            std::make_shared<Session>(std::move(socket), m_file_path)->run();
         } else {
             std::cout << "error: " << ec.message() << std::endl;
         }
