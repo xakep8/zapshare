@@ -51,6 +51,7 @@ int main(int argc, char* argv[]) {
 
         // Register this transfer with rendezvous server (id optional)
         Utils::register_transfer(transfer);
+        std::cout << "Your secret is: " << transfer.id << " share this with the receiver!!\n";
 
         // Start server to accept incoming peer connection
         start_server(std::string(filepath));
@@ -92,11 +93,13 @@ int main(int argc, char* argv[]) {
         // Connect to peer and download the file
         std::string host_override = std::getenv("ZAPSHARE_HOST_OVERRIDE") ? std::getenv("ZAPSHARE_HOST_OVERRIDE") : "";
         std::string connect_host = host_override.empty() ? peer_transfer.sender_ip : host_override;
-        if (!run_client_session(connect_host, static_cast<uint16_t>(peer_transfer.sender_port), std::string(secret), peer_transfer.file_name)) {
+        if (!run_client_session(connect_host, static_cast<uint16_t>(peer_transfer.sender_port), std::string(secret),
+                                peer_transfer.file_name)) {
             // Fallback for local testing: try localhost if public endpoint fails
             if (host_override.empty()) {
                 std::cerr << "Primary connect failed, trying localhost fallback..." << std::endl;
-                if (run_client_session("127.0.0.1", static_cast<uint16_t>(peer_transfer.sender_port), std::string(secret), peer_transfer.file_name)) {
+                if (run_client_session("127.0.0.1", static_cast<uint16_t>(peer_transfer.sender_port),
+                                       std::string(secret), peer_transfer.file_name)) {
                     return 0;
                 }
             }
