@@ -12,28 +12,38 @@ find_package(pqxx CONFIG QUIET)
 # Platform-specific libpqxx handling
 if(NOT pqxx_FOUND)
   if(APPLE)
-    # macOS with Homebrew: manual fallback
-    find_library(PQXX_FALLBACK_LIBRARY pqxx
-      HINTS "/opt/homebrew/opt/libpqxx/lib")
-    
-    find_path(PQXX_FALLBACK_INCLUDE pqxx/pqxx
-      HINTS "/opt/homebrew/opt/libpqxx/include")
+    # macOS with Homebrew
+    set(HOMEBREW_PREFIX "/opt/homebrew")
+    find_library(PQXX_LIBRARY pqxx
+      HINTS "${HOMEBREW_PREFIX}/opt/libpqxx/lib")
+    find_path(PQXX_INCLUDE_DIR pqxx/pqxx
+      HINTS "${HOMEBREW_PREFIX}/opt/libpqxx/include")
 
-    if(PQXX_FALLBACK_LIBRARY AND PQXX_FALLBACK_INCLUDE)
-      add_library(pqxx::pqxx STATIC IMPORTED)
+    if(PQXX_LIBRARY AND PQXX_INCLUDE_DIR)
+      add_library(pqxx::pqxx SHARED IMPORTED)
       set_target_properties(pqxx::pqxx PROPERTIES
-        IMPORTED_LOCATION "${PQXX_FALLBACK_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${PQXX_FALLBACK_INCLUDE}")
+        IMPORTED_LOCATION "${PQXX_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${PQXX_INCLUDE_DIR}")
       set(pqxx_FOUND TRUE)
     endif()
   elseif(UNIX)
-    # Linux: use system libraries and also link libpq (PostgreSQL client library)
-    find_library(PQXX_LIBRARY pqxx)
-    find_library(PQ_LIBRARY pq)
-    find_path(PQXX_INCLUDE_DIR pqxx/pqxx)
+    # Linux with Homebrew (linuxbrew)
+    set(HOMEBREW_PREFIX "/home/linuxbrew/.linuxbrew")
+    find_library(PQXX_LIBRARY pqxx
+      HINTS "${HOMEBREW_PREFIX}/opt/libpqxx/lib"
+            "${HOMEBREW_PREFIX}/lib")
+    find_library(PQ_LIBRARY pq
+      HINTS "${HOMEBREW_PREFIX}/opt/libpq/lib"
+            "${HOMEBREW_PREFIX}/lib")
+    find_path(PQXX_INCLUDE_DIR pqxx/pqxx
+      HINTS "${HOMEBREW_PREFIX}/opt/libpqxx/include"
+            "${HOMEBREW_PREFIX}/include")
 
     if(PQXX_LIBRARY AND PQ_LIBRARY AND PQXX_INCLUDE_DIR)
-      add_library(pqxx::pqxx UNKNOWN IMPORTED)
+      message(STATUS "Found libpqxx: ${PQXX_LIBRARY}")
+      message(STATUS "Found libpq: ${PQ_LIBRARY}")
+      message(STATUS "Found pqxx includes: ${PQXX_INCLUDE_DIR}")
+      add_library(pqxx::pqxx SHARED IMPORTED)
       set_target_properties(pqxx::pqxx PROPERTIES
         IMPORTED_LOCATION "${PQXX_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES "${PQXX_INCLUDE_DIR}"
