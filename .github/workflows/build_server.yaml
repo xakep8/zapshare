@@ -20,8 +20,13 @@ jobs:
         include:
           - os: ubuntu-latest
             install_cmd: |
-              sudo apt-get update
-              sudo apt-get install -y libpqxx-dev libpq-dev libssl-dev
+              # Install Homebrew if not present
+              if ! command -v brew &> /dev/null; then
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+                echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> ~/.bashrc
+                eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+              fi
+              brew install libpqxx openssl
           - os: macos-latest
             install_cmd: |
               # Install Homebrew if not present
