@@ -12,10 +12,6 @@ void start_server(const std::string& file_path, const std::string& transfer_id) 
     asio::io_context io;
     Server s(io, 5173, file_path);
     // Server run will poll for signal and then start
-    // However, s.run() is blocking or async?
-    // My implementation of s.run() calls do_receive() AND polls blocking.
-    // It's mix. Poll is blocking. Then do_receive is async.
-    // So we call s.run(), then io.run().
     s.run(transfer_id);
     io.run();
 }
@@ -52,9 +48,13 @@ int main(int argc, char* argv[]) {
             std::cout << "Public endpoint: " << public_ep.ip << ":" << public_ep.port << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "NAT traversal failed: " << e.what() << std::endl;
-            // Proceed anyway, might work locally
              transfer.sender_ip = "127.0.0.1";
         }
+        
+        // Discover Local IP
+        transfer.sender_local_ip = Utils::get_local_ip_address();
+        transfer.sender_local_port = 5173; 
+        std::cout << "Local endpoint: " << transfer.sender_local_ip << ":" << transfer.sender_local_port << std::endl;
 
         // Register this transfer with rendezvous server
         Utils::register_transfer(transfer);

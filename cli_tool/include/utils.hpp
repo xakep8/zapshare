@@ -21,6 +21,8 @@ namespace ip = asio::ip;
 struct PublicEndpoint {
     std::string ip;
     uint16_t port;
+    std::string local_ip; // New
+    uint16_t local_port;  // New
 };
 
 namespace Utils {
@@ -28,8 +30,34 @@ inline TRANSFERS transfer_metadata_from_json(const json& data) {
     try {
         TRANSFERS t;
         t.id = data["id"];
-        t.sender_ip = data["sender_ip"];
+        
+        // Unpack sender_ip (Format: PublicIP;LocalIP:LocalPort)
+        std::string raw_ip = data["sender_ip"];
+        size_t semi = raw_ip.find(';');
+        if (semi != std::string::npos) {
+            t.sender_ip = raw_ip.substr(0, semi);
+            std::string local_part = raw_ip.substr(semi + 1);
+            size_t colon = local_part.find(':');
+            if (colon != std::string::npos) {
+                t.sender_local_ip = local_part.substr(0, colon);
+                t.sender_local_port = std::stoi(local_part.substr(colon + 1));
+            } else {
+                t.sender_local_ip = local_part;
+                t.sender_local_port = 5173; // Default?
+            }
+        } else {
+            t.sender_ip = raw_ip;
+            t.sender_local_ip = ""; 
+            t.sender_local_port = 0;
+        }
+
         t.sender_port = data["sender_port"];
+        // Fallback or explicit fields if server supports them in future
+        if (t.sender_local_ip.empty()) {
+            t.sender_local_ip = data.contains("sender_local_ip") ? data["sender_local_ip"] : ""; 
+            t.sender_local_port = data.contains("sender_local_port") ? data["sender_local_port"].get<uint32_t>() : 0;
+        }
+        
         t.protocol = data["protocol"];
         t.file_name = data["file_name"];
         t.file_size = data["file_size"];
@@ -151,7 +179,12 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
     // Register discovered public endpoint with central server (Signaling)
     inline void signal_receiver_endpoint(const std::string& id, const PublicEndpoint& endpoint) {
         httplib::Client client("http://139.59.58.120:3000");
-        json payload = {{"public_ip", endpoint.ip}, {"public_port", endpoint.port}};
+        json payload = {
+            {"public_ip", endpoint.ip}, 
+            {"public_port", endpoint.port},
+            {"local_ip", endpoint.local_ip},
+            {"local_port", endpoint.local_port}
+        };
         auto res = client.Post(("/signal/" + id).c_str(), payload.dump(), "application/json");
         if (!res || res->status != 200) {
             std::cerr << "Failed to signal receiver endpoint to server\n";
@@ -168,8 +201,17 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
                 if (res->status == 200) {
                     try {
                         json data = json::parse(res->body);
-                        return PublicEndpoint{data["public_ip"], data["public_port"]};
-                    } catch (...) {}
+                        PublicEndpoint ep;
+                        ep.ip = data["public_ip"];
+                        ep.port = data["public_port"];
+                        ep.local_ip = data.contains("local_ip") ? data["local_ip"] : "";
+                        ep.local_port = data.contains("local_port") ? data["local_port"].get<uint16_t>() : 0;
+                        return ep;
+                    } catch (std::exception& e) {
+                        std::cerr << "Poll parse error: " << e.what() << std::endl;
+                    } catch (...) {
+                         std::cerr << "Poll parse error: Unknown" << std::endl;
+                    }
                 }
             }
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -178,13 +220,24 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
     }
 
     // Perform UDP hole punching to peer's public endpoint using an EXISTING socket
+    // Now tries both Public and Local
     inline void perform_udp_hole_punch(ip::udp::socket& socket, const PublicEndpoint& peer_endpoint) {
         try {
-            ip::udp::endpoint peer(asio::ip::make_address(peer_endpoint.ip), peer_endpoint.port);
+            std::vector<ip::udp::endpoint> candidates;
+            candidates.emplace_back(asio::ip::make_address(peer_endpoint.ip), peer_endpoint.port);
+            
+            if (!peer_endpoint.local_ip.empty() && peer_endpoint.local_port != 0) {
+                 candidates.emplace_back(asio::ip::make_address(peer_endpoint.local_ip), peer_endpoint.local_port);
+            }
+
             std::string punch_msg = "PUNCH";
-            // Send multiple punches
+            // Send multiple punches to all candidates
             for (int i = 0; i < 5; ++i) {
-                socket.send_to(asio::buffer(punch_msg), peer);
+                for (const auto& endpoint : candidates) {
+                    try {
+                         socket.send_to(asio::buffer(punch_msg), endpoint);
+                    } catch(...) {} // Ignore send errors (e.g. unreachable)
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
         } catch (std::exception& e) {
@@ -219,10 +272,19 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
     // Register transfer metadata with rendezvous server
     inline void register_transfer(const TRANSFERS& t) {
         httplib::Client client("http://139.59.58.120:3000");
+        
+        // Pack Local IP into sender_ip for legacy server compatibility
+        std::string packed_ip = t.sender_ip;
+        if (!t.sender_local_ip.empty()) {
+            packed_ip += ";" + t.sender_local_ip + ":" + std::to_string(t.sender_local_port);
+        }
+
         json payload = {
             {"id", t.id},
-            {"sender_ip", t.sender_ip},
+            {"sender_ip", packed_ip}, 
             {"sender_port", t.sender_port},
+            {"sender_local_ip", t.sender_local_ip},
+            {"sender_local_port", t.sender_local_port},
             {"protocol", t.protocol},
             {"file_name", t.file_name},
             {"file_size", t.file_size},

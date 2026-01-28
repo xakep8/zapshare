@@ -18,7 +18,7 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
     socket.open(udp::v4());
     socket.bind(udp::endpoint(udp::v4(), 0));
 
-    // STUN Logic
+    // STUN Logic & Local IP Discovery
     try {
         udp::endpoint stun_ep = *udp::resolver(io).resolve(udp::v4(), "stun.l.google.com", "19302").begin();
         std::array<uint8_t, 20> req = {0, 1, 0, 0, 0x21, 0x12, 0xA4, 0x42};
@@ -30,7 +30,13 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
         size_t n = socket.receive_from(asio::buffer(buf), sender);
         
         PublicEndpoint my_ep;
+        // Local IP/Port (from socket)
+        my_ep.local_ip = socket.local_endpoint().address().to_string(); // Note: if bound to 0.0.0.0 this is 0.0.0.0, need real local IP
+        my_ep.local_ip = Utils::get_local_ip_address(); // Use helper
+        my_ep.local_port = socket.local_endpoint().port();
+
         // STUN Parsing (Short)
+        bool stun_success = false;
         for(size_t i=20; i+8<=n;) {
             uint16_t t = (buf[i]<<8)|buf[i+1], l = (buf[i+2]<<8)|buf[i+3];
             if(t==0x20 && l>=8) {
@@ -39,22 +45,56 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
                 uint32_t a = ((buf[i+8]<<24)|(buf[i+9]<<16)|(buf[i+10]<<8)|buf[i+11]) ^ xk;
                 my_ep.port = p;
                 my_ep.ip = std::to_string(a>>24)+"."+std::to_string((a>>16)&0xFF)+"."+std::to_string((a>>8)&0xFF)+"."+std::to_string(a&0xFF);
+                stun_success = true;
                 break;
             }
             i += 4 + l + ((4-(l%4))%4);
         }
+        
+        if (!stun_success) throw std::runtime_error("STUN Parse failed");
+
         std::cout << "Public Endpoint: " << my_ep.ip << ":" << my_ep.port << std::endl;
+        std::cout << "Local Endpoint: " << my_ep.local_ip << ":" << my_ep.local_port << std::endl;
+        
         Utils::signal_receiver_endpoint(token, my_ep);
     } catch (std::exception& e) {
         std::cerr << "STUN/Signaling failed: " << e.what() << std::endl;
         // Continue anyway? NAT traversal might fail.
     }
 
-    udp::endpoint peer(asio::ip::make_address(host), port);
-    Utils::perform_udp_hole_punch(socket, {host, port});
+    // Prepare Candidates for connection (Public + Local Sender IP)
+    // We already have host/port passed in, which is Public IP/Port
+    // We need Sender's Local IP/Port. 
+    // To get that, we need to pass TRANSFERS struct or fetch it again?
+    // main.cpp passes host/port.
+    // Let's modify run_client_session to take TRANSFERS object or fetch it if needed.
+    // Or simpler: fetch it inside run_client_session since we have token (id).
+    // Actually we have token = secret.
+    
+    TRANSFERS t = Utils::get_transfer_metadata(token);
+    std::vector<udp::endpoint> peers;
+    peers.emplace_back(asio::ip::make_address(t.sender_ip), t.sender_port);
+    if (!t.sender_local_ip.empty() && t.sender_local_port != 0) {
+        peers.emplace_back(asio::ip::make_address(t.sender_local_ip), t.sender_local_port);
+        std::cout << "Added Sender Local Candidate: " << t.sender_local_ip << ":" << t.sender_local_port << std::endl;
+    }
+
+    // Update hole punch to take multiple peers? 
+    // We can just construct a dummy PublicEndpoint for the helper, 
+    // BUT the helper is designed for ONE peer with opt local.
+    // Let's manually punch here or update helper. 
+    // The helper `perform_udp_hole_punch` was updated to check .local_ip of the struct.
+    // So let's create a PublicEndpoint representing the Sender
+    PublicEndpoint sender_ep;
+    sender_ep.ip = t.sender_ip;
+    sender_ep.port = static_cast<uint16_t>(t.sender_port);
+    sender_ep.local_ip = t.sender_local_ip;
+    sender_ep.local_port = static_cast<uint16_t>(t.sender_local_port);
+
+    Utils::perform_udp_hole_punch(socket, sender_ep);
 
     std::array<char, UdpConfig::MAX_PACKET_SIZE> buf;
-    udp::endpoint sender;
+    udp::endpoint sender; // Packet source
 
     // Helper for Receive with Timeout
     auto recv_with_timeout = [&](std::string& data, int timeout_ms) -> bool {
@@ -72,10 +112,18 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
     std::string hello = std::string(Message::Hello) + " " + token + "\n";
     std::string rx;
     bool connected = false;
+    udp::endpoint connected_peer;
+
     for(int i=0; i<UdpConfig::MAX_RETRIES; ++i) {
-        socket.send_to(asio::buffer(hello), peer);
+        // Send HELLO to All Candidates
+        for (const auto& p : peers) {
+             try { socket.send_to(asio::buffer(hello), p); } catch(...) {}
+        }
+        
         if(recv_with_timeout(rx, UdpConfig::RETRY_TIMEOUT_MS) && rx.find(Message::Ack) == 0) {
-            connected = true; break;
+            connected = true; 
+            connected_peer = sender; // Lock onto the one that replied
+            break;
         }
         std::cout << "Handshake retry " << i+1 << std::endl;
     }
@@ -83,11 +131,11 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
         std::cerr << "Failed to connect to peer." << std::endl;
         return false;
     }
-    std::cout << "Connected!" << std::endl;
+    std::cout << "Connected to " << connected_peer.address().to_string() << ":" << connected_peer.port() << std::endl;
 
     // Get File
     std::ofstream out(output_filename, std::ios::binary | std::ios::trunc);
-    socket.send_to(asio::buffer(std::string(Message::Get) + "\n"), peer);
+    socket.send_to(asio::buffer(std::string(Message::Get) + "\n"), connected_peer);
     
     // Stop-and-Wait Loop
     size_t current_offset = 0;
@@ -95,6 +143,11 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
     int retries = 0;
     while(retries < UdpConfig::MAX_RETRIES) {
         if(recv_with_timeout(rx, UdpConfig::RETRY_TIMEOUT_MS)) {
+            // Check if from connected_peer? or allow update?
+            // Ideally should be from connected_peer.
+            // But if IP check logic is loose, maybe ok.
+            // Let's stick to connected_peer for sending ACKs.
+
             retries = 0; // Reset retries on success
             
             std::istringstream iss(rx);
@@ -118,15 +171,15 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
                         std::cout << "\rReceived: " << current_offset << " bytes" << std::flush;
                         
                         // Send ACK for the NEW offset
-                        socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), peer);
+                        socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
                     }
                 } else if (off < current_offset) {
                     // Old Packet, resend ACK for current_offset to move server forward
-                    socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), peer);
+                    socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
                 }
             } else if (cmd == Message::Done) {
                 // Send final ACK handling (Server might resend DONE if ACK lost)
-                socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), peer); 
+                socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer); 
                 std::cout << "\nTransfer Complete!" << std::endl;
                 return true;
             }
@@ -134,21 +187,11 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
             // Timeout
             std::cout << "\rTimeout, resending ACK... " << std::flush;
             retries++;
-            // Resend ACK for expected offset (Server interprets ACK(offset) as "I have received up to offset".
-            // If Server sent Data(offset) and we didn't get it, we verify what we have?
-            // Wait, if we timeout waiting for Data, it means we sent ACK(current_offset) and Server sent Data(current_offset) but it was lost.
-            // OR Server didn't get ACK.
-            // In both cases, if we resend ACK(current_offset), Server (if it has Data(current_offset)) should resend it.
-            // My Session::handle_packet says: 
-            // if (ack_offset == m_offset) { // Duplicate ACK ... resend_current_chunk() }
-            // Correct.
             
-            // Check socket.send_to(GET) initial case?
-            // If we timeout on GET response. We should resend GET?
             if (current_offset == 0) {
-                 socket.send_to(asio::buffer(std::string(Message::Get) + "\n"), peer);
+                 socket.send_to(asio::buffer(std::string(Message::Get) + "\n"), connected_peer);
             } else {
-                 socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), peer);
+                 socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
             }
         }
     }

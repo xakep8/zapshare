@@ -38,6 +38,8 @@ typedef struct Transfer_Metadata {
     std::string id;
     std::string sender_ip;
     uint32_t sender_port;
+    std::string sender_local_ip; // New
+    uint32_t sender_local_port;  // New
     std::string protocol;
     std::string file_name;
     size_t file_size;
