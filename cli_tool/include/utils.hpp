@@ -148,63 +148,87 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
     }
 }
 
-// Register discovered public endpoint with central server
-inline void register_public_endpoint(const std::string& token, const PublicEndpoint& endpoint) {
-    httplib::Client client("http://127.0.0.1:3000");
-    json payload = {{"token", token}, {"public_ip", endpoint.ip}, {"public_port", endpoint.port}};
-    client.Post("/register_endpoint", payload.dump(), "application/json");
-}
-
-// Perform UDP hole punching to peer's public endpoint
-inline ip::udp::socket perform_udp_hole_punch(asio::io_context& io_ctx, const PublicEndpoint& peer_endpoint) {
-    ip::udp::socket socket(io_ctx);
-    socket.open(ip::udp::v4());
-    ip::udp::endpoint peer(asio::ip::make_address(peer_endpoint.ip), peer_endpoint.port);
-    std::string punch_msg = "PUNCH";
-    for (int i = 0; i < 5; ++i) {
-        socket.send_to(asio::buffer(punch_msg), peer);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Register discovered public endpoint with central server (Signaling)
+    inline void signal_receiver_endpoint(const std::string& id, const PublicEndpoint& endpoint) {
+        httplib::Client client("http://127.0.0.1:3000");
+        json payload = {{"public_ip", endpoint.ip}, {"public_port", endpoint.port}};
+        auto res = client.Post(("/signal/" + id).c_str(), payload.dump(), "application/json");
+        if (!res || res->status != 200) {
+            std::cerr << "Failed to signal receiver endpoint to server\n";
+        }
     }
-    return socket;  // moved out (non-copyable)
-}
 
-// Generate a UUID v4 token (RFC 4122) using std::random_device
-inline std::string generate_uuid_token() {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint32_t> dis32(0, 0xFFFFFFFF);
-    auto rnd32 = [&]() { return dis32(gen); };
+    // Poll for receiver's public endpoint (Signaling)
+    inline PublicEndpoint poll_for_signal(const std::string& id) {
+        httplib::Client client("http://127.0.0.1:3000");
+        std::string url = "/signal/" + id;
+        
+        for (int i = 0; i < 30; ++i) { // Try for 30 seconds
+            if (auto res = client.Get(url.c_str())) {
+                if (res->status == 200) {
+                    try {
+                        json data = json::parse(res->body);
+                        return PublicEndpoint{data["public_ip"], data["public_port"]};
+                    } catch (...) {}
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        throw std::runtime_error("Timeout waiting for peer signal");
+    }
 
-    uint32_t d0 = rnd32();
-    uint16_t d1 = static_cast<uint16_t>(rnd32() & 0xFFFF);
-    uint16_t d2 = static_cast<uint16_t>((rnd32() & 0x0FFF) | 0x4000); // version 4
-    uint16_t d3 = static_cast<uint16_t>((rnd32() & 0x3FFF) | 0x8000); // variant 10xxxxxx
-    uint64_t d4_hi = rnd32();
-    uint64_t d4_lo = rnd32();
+    // Perform UDP hole punching to peer's public endpoint using an EXISTING socket
+    inline void perform_udp_hole_punch(ip::udp::socket& socket, const PublicEndpoint& peer_endpoint) {
+        try {
+            ip::udp::endpoint peer(asio::ip::make_address(peer_endpoint.ip), peer_endpoint.port);
+            std::string punch_msg = "PUNCH";
+            // Send multiple punches
+            for (int i = 0; i < 5; ++i) {
+                socket.send_to(asio::buffer(punch_msg), peer);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+        } catch (std::exception& e) {
+            std::cerr << "Hole punch error: " << e.what() << "\n";
+        }
+    }
 
-    std::ostringstream oss;
-    oss << std::hex << std::nouppercase << std::setfill('0')
-        << std::setw(8) << d0 << "-"
-        << std::setw(4) << d1 << "-"
-        << std::setw(4) << d2 << "-"
-        << std::setw(4) << d3 << "-"
-        << std::setw(8) << static_cast<uint32_t>(d4_hi) << std::setw(8) << static_cast<uint32_t>(d4_lo);
-    return oss.str();
-}
+    // Generate a UUID v4 token (RFC 4122) using std::random_device
+    inline std::string generate_uuid_token() {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<uint32_t> dis32(0, 0xFFFFFFFF);
+        auto rnd32 = [&]() { return dis32(gen); };
 
-// Register transfer metadata with rendezvous server
-inline void register_transfer(const TRANSFERS& t) {
-    httplib::Client client("http://127.0.0.1:3000");
-    json payload = {
-        {"id", t.id},
-        {"sender_ip", t.sender_ip},
-        {"sender_port", t.sender_port},
-        {"protocol", t.protocol},
-        {"file_name", t.file_name},
-        {"file_size", t.file_size},
-        {"file_hash", t.file_hash},
-        {"token", t.token}
-    };
-    client.Post("/register", payload.dump(), "application/json");
-}
+        uint32_t d0 = rnd32();
+        uint16_t d1 = static_cast<uint16_t>(rnd32() & 0xFFFF);
+        uint16_t d2 = static_cast<uint16_t>((rnd32() & 0x0FFF) | 0x4000); // version 4
+        uint16_t d3 = static_cast<uint16_t>((rnd32() & 0x3FFF) | 0x8000); // variant 10xxxxxx
+        uint64_t d4_hi = rnd32();
+        uint64_t d4_lo = rnd32();
+
+        std::ostringstream oss;
+        oss << std::hex << std::nouppercase << std::setfill('0')
+            << std::setw(8) << d0 << "-"
+            << std::setw(4) << d1 << "-"
+            << std::setw(4) << d2 << "-"
+            << std::setw(4) << d3 << "-"
+            << std::setw(8) << static_cast<uint32_t>(d4_hi) << std::setw(8) << static_cast<uint32_t>(d4_lo);
+        return oss.str();
+    }
+
+    // Register transfer metadata with rendezvous server
+    inline void register_transfer(const TRANSFERS& t) {
+        httplib::Client client("http://127.0.0.1:3000");
+        json payload = {
+            {"id", t.id},
+            {"sender_ip", t.sender_ip},
+            {"sender_port", t.sender_port},
+            {"protocol", t.protocol},
+            {"file_name", t.file_name},
+            {"file_size", t.file_size},
+            {"file_hash", t.file_hash},
+            {"token", t.token}
+        };
+        client.Post("/register", payload.dump(), "application/json");
+    }
 }  // namespace Utils
