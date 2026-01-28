@@ -38,29 +38,39 @@ class Session : public std::enable_shared_from_this<Session> {
          std::string cmd;
          iss >> cmd;
 
-         if (cmd == Message::Hello && m_state == State::WaitingHello) {
+         if (cmd == Message::Hello) {
              std::string token;
              iss >> token;
-             if (validate_token(token)) {
-                 m_state = State::Authenticated;
+             if (m_state == State::WaitingHello) {
+                 if (validate_token(token)) {
+                     m_state = State::Authenticated;
+                     send_message(std::string(Message::Ack) + "\n");
+                     std::cout << "Peer Authenticated. Sent ACK." << std::endl;
+                 } else {
+                     send_message(std::string(Message::Error) + "\n");
+                     m_state = State::Closed;
+                 }
+             } else if (m_state == State::Authenticated || m_state == State::Transferring) {
+                 // Idempotent ACK for retransmissions
                  send_message(std::string(Message::Ack) + "\n");
-                 std::cout << "Peer Authenticated. Sent ACK." << std::endl;
-             } else {
-                 send_message(std::string(Message::Error) + "\n");
-                 m_state = State::Closed;
              }
-         } else if (cmd == Message::Get && m_state == State::Authenticated) {
-             m_file_id = m_transfer_metadata.id.empty() ? m_transfer_metadata.file_name : m_transfer_metadata.id;
-             m_file = std::ifstream(m_file_path, std::ifstream::binary);
-             if (!m_file.is_open()) {
-                 std::cerr << "Failed to open file: " << m_file_path << std::endl;
-                 send_message(std::string(Message::Error) + "\n");
-                 m_state = State::Closed;
-                 return;
+         } else if (cmd == Message::Get) {
+             if (m_state == State::Authenticated) {
+                 m_file_id = m_transfer_metadata.id.empty() ? m_transfer_metadata.file_name : m_transfer_metadata.id;
+                 m_file = std::ifstream(m_file_path, std::ifstream::binary);
+                 if (!m_file.is_open()) {
+                     std::cerr << "Failed to open file: " << m_file_path << std::endl;
+                     send_message(std::string(Message::Error) + "\n");
+                     m_state = State::Closed;
+                     return;
+                 }
+                 std::cout << "Starting UDP transfer..." << std::endl;
+                 m_state = State::Transferring;
+                 send_next_chunk();
+             } else if (m_state == State::Transferring) {
+                 // Client might have missed first packet or just be demanding. Resend.
+                 resend_current_chunk();
              }
-             std::cout << "Starting UDP transfer..." << std::endl;
-             m_state = State::Transferring;
-             send_next_chunk();
          } else if (cmd == Message::Ack && m_state == State::Transferring) {
              size_t ack_offset;
              if (iss >> ack_offset) {
