@@ -48,7 +48,7 @@ inline bool check_file_exists(const std::string_view& filepath) {
 }
 
 inline bool look_up(const std::string_view secret) {
-    httplib::Client client("http://127.0.0.1:3000");
+    httplib::Client client("http://139.59.58.120:3000");
     const std::string url = "/lookup/" + std::string(secret);
     if (auto res = client.Get(url)) {
         if (res->body == "True") {
@@ -59,7 +59,7 @@ inline bool look_up(const std::string_view secret) {
 }
 
 inline TRANSFERS get_transfer_metadata(const std::string_view& secret) {
-    httplib::Client client("http://127.0.0.1:3000");
+    httplib::Client client("http://139.59.58.120:3000");
     const std::string url = "/getfile/" + std::string(secret);
     if (auto res = client.Get(url)) {
         return transfer_metadata_from_json(json::parse(res->body));
@@ -150,7 +150,7 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 
     // Register discovered public endpoint with central server (Signaling)
     inline void signal_receiver_endpoint(const std::string& id, const PublicEndpoint& endpoint) {
-        httplib::Client client("http://127.0.0.1:3000");
+        httplib::Client client("http://139.59.58.120:3000");
         json payload = {{"public_ip", endpoint.ip}, {"public_port", endpoint.port}};
         auto res = client.Post(("/signal/" + id).c_str(), payload.dump(), "application/json");
         if (!res || res->status != 200) {
@@ -160,7 +160,7 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 
     // Poll for receiver's public endpoint (Signaling)
     inline PublicEndpoint poll_for_signal(const std::string& id) {
-        httplib::Client client("http://127.0.0.1:3000");
+        httplib::Client client("http://139.59.58.120:3000");
         std::string url = "/signal/" + id;
         
         for (int i = 0; i < 30; ++i) { // Try for 30 seconds
@@ -218,7 +218,7 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 
     // Register transfer metadata with rendezvous server
     inline void register_transfer(const TRANSFERS& t) {
-        httplib::Client client("http://127.0.0.1:3000");
+        httplib::Client client("http://139.59.58.120:3000");
         json payload = {
             {"id", t.id},
             {"sender_ip", t.sender_ip},
