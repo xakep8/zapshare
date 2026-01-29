@@ -1,3 +1,6 @@
 out
 .env
 .DS_Store
+central-server.service
+useful-commands.txt
+build

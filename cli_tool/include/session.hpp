@@ -12,155 +12,157 @@
 #include "types.h"
 #include "utils.hpp"
 
-using asio::ip::tcp;
+using asio::ip::udp;
 
 enum class State { WaitingHello, Authenticated, Transferring, Closed };
 
 class Session : public std::enable_shared_from_this<Session> {
     public:
-     Session(tcp::socket socket, const std::string& file_path) : m_socket(std::move(socket)), m_file_path(file_path) {}
+     Session(asio::ip::udp::socket& socket, asio::ip::udp::endpoint remote_endpoint, const std::string& file_path)
+         : m_socket(socket), m_remote_endpoint(remote_endpoint), m_file_path(file_path) {}
 
-    void run() { wait_for_request(); }
+     void start() {
+         std::cout << "Session ready. Waiting for peer..." << std::endl;
+     }
 
-   private:
-    bool validate_token(const std::string& token) {
-        try {
-            m_transfer_metadata = Utils::get_transfer_metadata(token);
-            return true;
-        } catch (const std::exception& e) {
-            std::cerr << "Token validation failed: " << e.what() << std::endl;
-            return false;
-        }
-    }
+     bool is_closed() const { return m_state == State::Closed; }
 
-    void send_response(const std::string& response, bool close_after = false) {
-        auto self(shared_from_this());
-        asio::async_write(m_socket, asio::buffer(response), [this, self, close_after](asio::error_code ec, std::size_t) {
-            if (ec || close_after) close_connection();
-        });
-    }
+     void handle_packet(const std::string& data, const asio::ip::udp::endpoint& sender) {
+         if (sender.address() != m_remote_endpoint.address()) {
+             std::cerr << "Warning: Packet from different IP " << sender.address().to_string() 
+                       << " (Expected: " << m_remote_endpoint.address().to_string() << "). Updating endpoint." << std::endl;
+         }
+         m_remote_endpoint = sender; 
 
-    void close_connection() {
-        m_state = State::Closed;
-        asio::error_code ec;
-        m_socket.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
-        m_socket.close();
-    }
+         if (m_state == State::Closed) return;
 
-    void start_chunked_transfer() {
-        m_state = State::Transferring;
-        m_offset = 0;
-        std::cout << "Starting transfer from file: " << m_file_path << std::endl;
-        send_next_chunk();
-    }
+         std::istringstream iss(data);
+         std::string cmd;
+         iss >> cmd;
 
-    void send_next_chunk() {
-        if (!m_file.is_open()) {
-            std::cerr << "File not open for reading: " << m_file_path << std::endl;
-            close_connection();
-            return;
-        }
-        std::cout << "Attempting to read from file at offset: " << m_offset << std::endl;
-        m_file.read(m_chunk.data(), m_chunk.size());
-        std::streamsize n = m_file.gcount();
-        std::cout << "Read " << n << " bytes from file" << std::endl;
-        if (n <= 0) {
-            std::cout << "No more data to read, sending DONE" << std::endl;
-            send_response(std::string(Message::Done) + "\n", true);
-            return;
-        }
-        std::cout << "Preparing to send chunk: offset=" << m_offset << " length=" << n << std::endl;
-        m_header = std::string(Message::Data) + " " + m_file_id + " " + std::to_string(m_offset) + " " + std::to_string(n) + "\n";
-        std::cout << "Header: " << m_header;
-        std::vector<asio::const_buffer> buffers;
-        buffers.push_back(asio::buffer(m_header));
-        buffers.push_back(asio::buffer(m_chunk.data(), static_cast<size_t>(n)));
-        std::cout << "Initiating async_write for header (" << m_header.size() << " bytes) + data (" << n << " bytes)" << std::endl;
-        auto self(shared_from_this());
-        asio::async_write(m_socket, buffers, [this, self, n](asio::error_code ec, std::size_t bytes_written) {
-            if (!ec) {
-                std::cout << "async_write completed successfully, wrote " << bytes_written << " bytes" << std::endl;
-                m_offset += static_cast<size_t>(n);
-                send_next_chunk();
-            } else {
-                std::cerr << "async_write failed: " << ec.message() << std::endl;
-                close_connection();
-            }
-        });
-    }
+         if (cmd == Message::Hello) {
+             std::string token;
+             iss >> token;
+             if (m_state == State::WaitingHello) {
+                 if (validate_token(token)) {
+                     m_state = State::Authenticated;
+                     send_message(std::string(Message::Ack) + "\n");
+                     std::cout << "Peer Authenticated. Sent ACK." << std::endl;
+                 } else {
+                     send_message(std::string(Message::Error) + "\n");
+                     m_state = State::Closed;
+                 }
+             } else if (m_state == State::Authenticated || m_state == State::Transferring) {
+                 // Idempotent ACK for retransmissions
+                 send_message(std::string(Message::Ack) + "\n");
+             }
+         } else if (cmd == Message::Get) {
+             if (m_state == State::Authenticated) {
+                 m_file_id = m_transfer_metadata.id.empty() ? m_transfer_metadata.file_name : m_transfer_metadata.id;
+                 m_file = std::ifstream(m_file_path, std::ifstream::binary);
+                 if (!m_file.is_open()) {
+                     std::cerr << "Failed to open file: " << m_file_path << std::endl;
+                     send_message(std::string(Message::Error) + "\n");
+                     m_state = State::Closed;
+                     return;
+                 }
+                 std::cout << "Starting UDP transfer..." << std::endl;
+                 m_state = State::Transferring;
+                 send_next_chunk();
+             } else if (m_state == State::Transferring) {
+                 // Client might have missed first packet or just be demanding. Resend.
+                 resend_current_chunk();
+             }
+         } else if (cmd == Message::Ack && m_state == State::Transferring) {
+             size_t ack_offset;
+             if (iss >> ack_offset) {
+                 size_t expected_offset = m_offset + m_last_chunk_size;
+                 if (ack_offset == expected_offset) {
+                     // Correct ACK
+                     if (m_last_chunk_done) {
+                         std::cout << "Final ACK received. Transfer complete." << std::endl;
+                         m_state = State::Closed;
+                     } else {
+                         m_offset = expected_offset;
+                         send_next_chunk();
+                     }
+                 } else if (ack_offset == m_offset) {
+                     // Duplicate ACK for previous chunk (Packet loss of Data)
+                     // Resend current chunk
+                     std::cout << "Duplicate ACK (" << ack_offset << "). Resending..." << std::endl;
+                     resend_current_chunk();
+                 } else {
+                     std::cout << "Unexpected ACK offset: " << ack_offset << " (Expected: " << expected_offset << ")" << std::endl;
+                 }
+             }
+         }
+     }
 
-    void handle_message(const std::string& data) {
-        std::istringstream iss(data);
-        std::string cmd;
-        iss >> cmd;
+    private:
+     void send_message(const std::string& msg) {
+         m_socket.send_to(asio::buffer(msg), m_remote_endpoint);
+     }
 
-        if (m_state == State::WaitingHello) {
-            if (cmd == Message::Hello) {
-                std::string token;
-                iss >> token;
-                if (validate_token(token)) {
-                    m_state = State::Authenticated;
-                    send_response("OK\n");
-                } else {
-                    send_response("FAIL\n", true);
-                    close_connection();
-                }
-            } else {
-                send_response("FAIL\n", true);
-                close_connection();
-            }
-        } else if (m_state == State::Authenticated) {
-            if (cmd == Message::Get) {
-                // Use validated metadata and the provided file path on sender side
-                m_file_id = m_transfer_metadata.id.empty() ? m_transfer_metadata.file_name : m_transfer_metadata.id;
-                m_file = std::ifstream(m_file_path, std::ifstream::binary);
-                if (!m_file.is_open()) {
-                    std::cerr << "Failed to open file for GET: " << m_file_path << std::endl;
-                    send_response("FAIL\n", true);
-                    close_connection();
-                    return;
-                }
-                std::cout << "GET received, starting transfer of " << m_file_path << std::endl;
-                start_chunked_transfer();
-            } else if (cmd == Message::Done) {
-                close_connection();
-            }
-        } else {
-            close_connection();
-        }
-    }
+     void resend_current_chunk() {
+          if (m_last_packet_cache.empty()) {
+              send_next_chunk();
+          } else {
+              m_socket.send_to(asio::buffer(m_last_packet_cache), m_remote_endpoint);
+          }
+     }
 
-    void wait_for_request() {
-        auto self(shared_from_this());
-        asio::async_read_until(m_socket, m_buffer, "\n", [this, self](asio::error_code ec, std::size_t /*length*/) {
-            if (!ec) {
-                std::istream is(&m_buffer);
-                std::string line;
-                std::getline(is, line);
-                if (!line.empty() && line.back() == '\r') {
-                    line.pop_back();  // Remove CR if CRLF
-                }
-                std::cout << "Session received: " << line << std::endl;
-                handle_message(line);
-                if (m_state != State::Closed && m_state != State::Transferring) {
-                    wait_for_request();
-                }
-            } else {
-                std::cerr << "Session read error: " << ec.category().name() << ":" << ec.value() << " (" << ec.message() << ")" << std::endl;
-                close_connection();
-            }
-        });
-    }
+     void send_next_chunk() {
+         if (!m_file.is_open()) return;
 
-   private:
-    tcp::socket m_socket;
-    asio::streambuf m_buffer;
-    State m_state = State::WaitingHello;
-    std::ifstream m_file;
-    std::string m_file_id;
-    std::array<char, 8192> m_chunk{};
-    size_t m_offset = 0;
-    TRANSFERS m_transfer_metadata{};
-    std::string m_file_path;
-    std::string m_header;  // Keep header alive for async_write
+         m_file.seekg(m_offset); // Ensure we read from correct offset
+         m_file.read(m_chunk_buffer.data(), UdpConfig::PAYLOAD_SIZE);
+         std::streamsize bytes_read = m_file.gcount();
+         
+         if (bytes_read <= 0) {
+             // Send DONE
+             std::string done_msg = std::string(Message::Done) + "\n";
+             send_message(done_msg);
+             m_last_packet_cache = done_msg;
+             m_last_chunk_done = true;
+             m_last_chunk_size = 0;
+             std::cout << "Sent DONE." << std::endl;
+             return; 
+         }
+
+         m_last_chunk_size = bytes_read;
+         m_last_chunk_done = false;
+
+         std::ostringstream oss;
+         oss << Message::Data << " " << m_file_id << " " << m_offset << " " << bytes_read << " ";
+         std::string header = oss.str();
+         
+         std::string packet = header;
+         packet.append(m_chunk_buffer.data(), bytes_read);
+
+         m_last_packet_cache = packet; // Cache for retransmission
+         m_socket.send_to(asio::buffer(packet), m_remote_endpoint);
+     }
+
+     bool validate_token(const std::string& token) {
+         try {
+             m_transfer_metadata = Utils::get_transfer_metadata(token);
+             return true;
+         } catch (...) {
+             return false;
+         }
+     }
+
+    private:
+     asio::ip::udp::socket& m_socket;
+     asio::ip::udp::endpoint m_remote_endpoint;
+     std::string m_file_path;
+     State m_state = State::WaitingHello;
+     std::ifstream m_file;
+     std::string m_file_id;
+     std::array<char, UdpConfig::MAX_PACKET_SIZE> m_chunk_buffer;
+     size_t m_offset = 0;
+     size_t m_last_chunk_size = 0;
+     bool m_last_chunk_done = false;
+     std::string m_last_packet_cache;
+     TRANSFERS m_transfer_metadata{};
 };
