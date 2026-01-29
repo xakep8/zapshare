@@ -9,7 +9,7 @@ Server::Server(asio::io_context& io_context, short port, const std::string& file
     : m_Initialized(false), m_socket(io_context, asio::ip::udp::endpoint(asio::ip::udp::v4(), port)), m_file_path(file_path) {
 }
 
-Server::~Server() { std::cout << "Destructor\n"; }
+Server::~Server() { std::cout << "Your file was transfered successfully\n"; }
 
 void Server::run(const std::string& transfer_id) {
     m_Initialized = true;
@@ -49,6 +49,7 @@ void Server::do_receive() {
                std::string data(buffer->data(), bytes_recvd);
                if (m_session) {
                    m_session->handle_packet(data, *sender_ptr);
+                   if (m_session->is_closed()) return; 
                }
             } else if (ec != asio::error::operation_aborted) {
                 std::cerr << "Receive error: " << ec.message() << std::endl;

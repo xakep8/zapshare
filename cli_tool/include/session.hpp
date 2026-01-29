@@ -25,6 +25,8 @@ class Session : public std::enable_shared_from_this<Session> {
          std::cout << "Session ready. Waiting for peer..." << std::endl;
      }
 
+     bool is_closed() const { return m_state == State::Closed; }
+
      void handle_packet(const std::string& data, const asio::ip::udp::endpoint& sender) {
          if (sender.address() != m_remote_endpoint.address()) {
              std::cerr << "Warning: Packet from different IP " << sender.address().to_string() 
