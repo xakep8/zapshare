@@ -84,6 +84,38 @@ int main() {
         }
     });
 
+    // Simple in-memory storage for signaling (id -> json)
+    // Note: In a production environment, this should probably be in the database or Redis
+    // using a static map for simplicity here as DB schema update wasn't requested in plan
+    static std::mutex signal_mutex;
+    static std::map<std::string, json> signal_store;
+
+    svr.Post(R"(/signal/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
+        std::string id = req.matches[1];
+        try {
+            json data = json::parse(req.body);
+            {
+                std::lock_guard<std::mutex> lock(signal_mutex);
+                signal_store[id] = data;
+            }
+            std::cout << "Signal received for " << id << ": " << data.dump() << std::endl;
+            res.status = httplib::StatusCode::OK_200;
+        } catch (std::exception& e) {
+            std::cerr << "Error parsing signal: " << e.what() << "\n";
+            res.status = httplib::StatusCode::BadRequest_400;
+        }
+    });
+
+    svr.Get(R"(/signal/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
+        std::string id = req.matches[1];
+        std::lock_guard<std::mutex> lock(signal_mutex);
+        if (signal_store.count(id)) {
+            res.set_content(signal_store[id].dump(), "application/json");
+        } else {
+            res.status = httplib::StatusCode::NotFound_404;
+        }
+    });
+
     svr.Get("/health", [](const httplib::Request& req, httplib::Response& res) {
         res.set_content("Your Server is healthy and running just fine brother!\nYou've come to right place!",
                         "text/plain");
