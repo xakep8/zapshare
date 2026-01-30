@@ -174,8 +174,11 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
                         socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
                     }
                 } else if (off < current_offset) {
-                    // Old Packet, resend ACK for current_offset to move server forward
+                    // Old Packet, resend ACK
                     socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
+                } else {
+                     // Future packet (Out of Order). Send ACK for current_offset to trigger fast retransmit on sender
+                     socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
                 }
             } else if (cmd == Message::Done) {
                 // Send final ACK handling (Server might resend DONE if ACK lost)
