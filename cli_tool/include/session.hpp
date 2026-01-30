@@ -129,7 +129,7 @@ class Session : public std::enable_shared_from_this<Session> {
                  if (m_dup_ack_count >= 3) {
                      // Fast Retransmit
                      // Verify packet exists
-                     std::cout << "Fast Retransmit: " << ack_offset << std::endl;
+                     // std::cout << "Fast Retransmit: " << ack_offset << std::endl;
                      resend_packet(ack_offset);
                      m_dup_ack_count = 0;
                  }
@@ -228,7 +228,7 @@ class Session : public std::enable_shared_from_this<Session> {
      
      // Sliding Window Members
      size_t m_next_send_offset = 0;
-     size_t m_window_size = 32; // Configurable window size
+     size_t m_window_size = 512; // Configurable window size
      std::map<size_t, PacketInfo> m_inflight_packets; // Offset -> Packet
      bool m_eof_reached = false;
      int m_dup_ack_count = 0;

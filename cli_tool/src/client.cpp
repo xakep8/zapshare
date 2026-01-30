@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+#include <vector>
+#include <map>
+
 #include "types.h"
 #include "utils.hpp"
 
@@ -137,8 +140,10 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
     std::ofstream out(output_filename, std::ios::binary | std::ios::trunc);
     socket.send_to(asio::buffer(std::string(Message::Get) + "\n"), connected_peer);
     
-    // Stop-and-Wait Loop
+    // Stop-and-Wait Loop -> Sliding Window Receiver
     size_t current_offset = 0;
+    std::map<size_t, std::string> packet_buffer; // Buffer for out-of-order packets
+
 
     int retries = 0;
     while(retries < UdpConfig::MAX_RETRIES) {
@@ -168,8 +173,36 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
                         out.seekp(off);
                         out.write(rx.data() + payload_idx, len);
                         current_offset += len;
-                        std::cout << "\rReceived: " << current_offset << " bytes" << std::flush;
+                        // std::cout << "\rReceived: " << current_offset << " bytes" << std::flush;
                         
+                        // Check Buffer for contiguous packets
+                        while (packet_buffer.count(current_offset)) {
+                            std::string& buffered_pkt = packet_buffer[current_offset];
+                             // Parse header again to get len? Or store len?
+                             // Simplified: We store raw packet payload in buffer? 
+                             // No, let's store just the data to be clean, or full packet?
+                             // storing full packet is easier to parse same way.
+                             // But we need 'len' from it.
+                             
+                             // Let's parse the buffered packet
+                             std::istringstream b_iss(buffered_pkt);
+                             std::string b_cmd, b_id; size_t b_off, b_len;
+                             b_iss >> b_cmd >> b_id >> b_off >> b_len;
+                             
+                             int b_spaces=0; size_t b_payload_idx=0;
+                             for(size_t i=0;i<buffered_pkt.size();++i) {
+                                 if(buffered_pkt[i]==' ') b_spaces++;
+                                 if(b_spaces==4) { b_payload_idx=i+1; break; }
+                             }
+                             
+                             out.seekp(b_off);
+                             out.write(buffered_pkt.data() + b_payload_idx, b_len);
+                             current_offset += b_len;
+                             packet_buffer.erase(b_off);
+                        }
+                        
+                        std::cout << "\rReceived: " << current_offset << " bytes" << std::flush;
+
                         // Send ACK for the NEW offset
                         socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
                     }
@@ -177,7 +210,11 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
                     // Old Packet, resend ACK
                     socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
                 } else {
-                     // Future packet (Out of Order). Send ACK for current_offset to trigger fast retransmit on sender
+                     // Future packet (Out of Order). Buffer it.
+                     if (packet_buffer.find(off) == packet_buffer.end()) {
+                         packet_buffer[off] = rx;
+                     }
+                     // Send ACK for current_offset (Duplicate ACK) to trigger fast retransmit for the GAP
                      socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
                 }
             } else if (cmd == Message::Done) {
