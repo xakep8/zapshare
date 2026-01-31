@@ -17,6 +17,7 @@ void start_server(const std::string& file_path, const std::string& transfer_id) 
 }
 
 int main(int argc, char* argv[]) {
+    Utils::load_env();
     if (argc < 2) {
         Error::print_usage();
         return 1;

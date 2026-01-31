@@ -200,8 +200,10 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
                              current_offset += b_len;
                              packet_buffer.erase(b_off);
                         }
+
                         
-                        std::cout << "\rReceived: " << current_offset << " bytes" << std::flush;
+                        double percent = (static_cast<double>(current_offset) / t.file_size) * 100.0;
+                        std::cout << "\rReceived: " << current_offset << " / " << t.file_size << " bytes (" << std::fixed << std::setprecision(1) << percent << "%)" << std::flush;
 
                         // Send ACK for the NEW offset
                         socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);

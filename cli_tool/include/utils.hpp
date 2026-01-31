@@ -26,6 +26,30 @@ struct PublicEndpoint {
 };
 
 namespace Utils {
+inline void load_env() {
+    std::ifstream env_file(".env");
+    if (!env_file.is_open()) {
+        // Try executable directory? For now just cwd.
+        return;
+    }
+    std::string line;
+    while (std::getline(env_file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        size_t delimiter = line.find('=');
+        if (delimiter != std::string::npos) {
+            std::string key = line.substr(0, delimiter);
+            std::string value = line.substr(delimiter + 1);
+            // Trim whitespace if needed? For simplicity assume clean file.
+            setenv(key.c_str(), value.c_str(), 1);
+        }
+    }
+}
+
+inline std::string backend_url() {
+    const char* env_url = std::getenv("BACKEND_URL");
+    return env_url ? std::string(env_url) : "http://139.59.58.120:3000";
+}
+
 inline TRANSFERS transfer_metadata_from_json(const json& data) {
     try {
         TRANSFERS t;
@@ -76,7 +100,7 @@ inline bool check_file_exists(const std::string_view& filepath) {
 }
 
 inline bool look_up(const std::string_view secret) {
-    httplib::Client client("http://139.59.58.120:3000");
+    httplib::Client client(backend_url());
     const std::string url = "/lookup/" + std::string(secret);
     if (auto res = client.Get(url)) {
         if (res->body == "True") {
@@ -87,7 +111,7 @@ inline bool look_up(const std::string_view secret) {
 }
 
 inline TRANSFERS get_transfer_metadata(const std::string_view& secret) {
-    httplib::Client client("http://139.59.58.120:3000");
+    httplib::Client client(backend_url());
     const std::string url = "/getfile/" + std::string(secret);
     if (auto res = client.Get(url)) {
         return transfer_metadata_from_json(json::parse(res->body));
@@ -178,7 +202,7 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 
     // Register discovered public endpoint with central server (Signaling)
     inline void signal_receiver_endpoint(const std::string& id, const PublicEndpoint& endpoint) {
-        httplib::Client client("http://139.59.58.120:3000");
+        httplib::Client client(backend_url());
         json payload = {
             {"public_ip", endpoint.ip}, 
             {"public_port", endpoint.port},
@@ -193,7 +217,7 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 
     // Poll for receiver's public endpoint (Signaling)
     inline PublicEndpoint poll_for_signal(const std::string& id) {
-        httplib::Client client("http://139.59.58.120:3000");
+        httplib::Client client(backend_url());
         std::string url = "/signal/" + id;
         
         for (int i = 0; i < 30; ++i) { // Try for 30 seconds
@@ -271,7 +295,7 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
 
     // Register transfer metadata with rendezvous server
     inline void register_transfer(const TRANSFERS& t) {
-        httplib::Client client("http://139.59.58.120:3000");
+        httplib::Client client(backend_url());
         
         // Pack Local IP into sender_ip for legacy server compatibility
         std::string packed_ip = t.sender_ip;

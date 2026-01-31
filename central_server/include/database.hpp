@@ -60,6 +60,42 @@ pqxx::connection& conn() {
     return *connection;
 }
 
+void reconnect() {
+    std::cerr << "Attempting to reconnect to database...\n";
+    try {
+        connection.reset(); // Close old connection
+        connection = std::make_unique<pqxx::connection>(get_env("DATABASE_URL"));
+        if (connection->is_open()) {
+            std::cout << "Reconnected to Database Successfully!\n";
+        } else {
+             std::cerr << "Reconnection failed: connection not open.\n";
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Reconnection failed: " << e.what() << "\n";
+        // Convert to broken_connection so retry loop continues/fails appropriately if needed, 
+        // or just let the next usage fail.
+    }
+}
+
+template<typename Func>
+auto retry_operation(Func action) {
+    int retries = 3;
+    while (true) {
+        try {
+            return action();
+        } catch (const pqxx::broken_connection& e) {
+            std::cerr << "Database connection broken: " << e.what() << "\n";
+            if (--retries < 0) throw; // Rethrow if out of retries
+            reconnect();
+            std::this_thread::sleep_for(std::chrono::seconds(1)); // Wait a bit
+        } catch (const std::exception& e) {
+             // Other DB errors might not be recoverable by reconnecting, but let's be safe?
+             // Usually retry only on connection issues.
+             throw; 
+        }
+    }
+}
+
 void create_transfers_table() {
     pqxx::work txn(conn());
 
@@ -146,47 +182,46 @@ void print_transfer(const TransferRow& t) {
 }
 
 bool lookup_transfer(const std::string_view secret) {
-    pqxx::read_transaction txn(conn());
-
-    try {
+    return retry_operation([&]() {
+        pqxx::read_transaction txn(conn());
         pqxx::result r = txn.exec_params("SELECT * FROM transfers WHERE id = $1", std::string(secret));
-
         return !r.empty();
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << "\n";
-        return false;
-    }
+    });
 }
 
 void mark_transfer_claimed(const std::string_view secret) {
-    pqxx::work txn(conn());
-    try {
+    retry_operation([&]() {
+        pqxx::work txn(conn());
         txn.exec_params("UPDATE transfers SET claimed = true WHERE id = $1", std::string(secret));
         txn.commit();
-    } catch (std::exception& e) {
-        std::cerr << "ERROR: " << e.what() << "\n";
-        throw std::runtime_error(e.what());
-    }
+        return true; // dummy return
+    });
 }
 
 TransferRow get_transfers_metadata(const std::string_view secret) {
-    pqxx::read_transaction txn(conn());
-
-    try {
+    return retry_operation([&]() {
+        pqxx::work txn(conn()); // Use work for atomic read + update if possible, or keep separate
+        // Note: The original had read_transaction then mark_transfer_claimed which is a separate txn.
+        // Let's keep logic similar but robust.
+        
         pqxx::result r = txn.exec_params("SELECT * FROM transfers WHERE id = $1", std::string(secret));
-        txn.commit();
-        mark_transfer_claimed(secret);
+        if (r.empty()) throw std::runtime_error("Transfer not found");
+        
         TransferRow data = to_transfer_row(r[0]);
+        // Ideally we commit this read if we were locking, but we are just reading.
+        txn.commit(); // Not strictly needed for read but fine.
+
+        mark_transfer_claimed(secret); // This has its own retry logic if we wrap it, or we wrap the whole thing.
+        // mark_transfer_claimed already creates a transaction.
+        
         data.claimed = true;
         return data;
-    } catch (std::exception& e) {
-        throw std::runtime_error(e.what());
-    }
+    });
 }
 
 bool register_transfers(const json data) {
-    pqxx::work txn(conn());
-    try {
+    return retry_operation([&]() {
+        pqxx::work txn(conn());
         TRANSFERS payload = transfer_row_from_json(data);
         txn.exec_params(
             R"(
@@ -213,9 +248,7 @@ bool register_transfers(const json data) {
             payload.file_hash, payload.token);
 
         txn.commit();
-    } catch (std::exception& e) {
-        std::cerr << "ERROR: " << e.what() << "\n";
-        throw std::runtime_error(e.what());
-    }
+        return true;
+    });
 }
 }  // namespace DB
