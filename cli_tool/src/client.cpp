@@ -233,7 +233,9 @@ bool run_client_session(const std::string& host, uint16_t port, const std::strin
             if (current_offset == 0) {
                  socket.send_to(asio::buffer(std::string(Message::Get) + "\n"), connected_peer);
             } else {
-                 socket.send_to(asio::buffer(std::string(Message::Ack) + " " + std::to_string(current_offset) + "\n"), connected_peer);
+                 // Send GET to trigger "check_timeouts" on Sender side immediately
+                 // effectively synonymous to a NACK for the window
+                 socket.send_to(asio::buffer(std::string(Message::Get) + "\n"), connected_peer);
             }
         }
     }

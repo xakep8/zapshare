@@ -215,32 +215,56 @@ inline PublicEndpoint get_public_endpoint(const std::string& stun_server = "stun
         }
     }
 
-    // Poll for receiver's public endpoint (Signaling)
+    // Subscribe to peer signal via Server-Sent Events (SSE)
     inline PublicEndpoint poll_for_signal(const std::string& id) {
         httplib::Client client(backend_url());
+        client.set_connection_timeout(0, 500000); // 0.5s timeout
         std::string url = "/signal/" + id;
         
-        for (int i = 0; i < 30; ++i) { // Try for 30 seconds
-            if (auto res = client.Get(url.c_str())) {
-                if (res->status == 200) {
+        PublicEndpoint ep;
+        bool received = false;
+        auto timeout_start = std::chrono::steady_clock::now();
+        const auto timeout_duration = std::chrono::seconds(900); // 15 minutes
+        
+        auto res = client.Get(url.c_str(), [&](const char* data, size_t data_length) -> bool {
+            // Parse SSE event stream
+            std::string chunk(data, data_length);
+            
+            // SSE format: "data: {...}\n\n"
+            size_t data_pos = chunk.find("data: ");
+            if (data_pos != std::string::npos) {
+                size_t start = data_pos + 6; // Skip "data: "
+                size_t end = chunk.find('\n', start);
+                if (end != std::string::npos) {
+                    std::string json_str = chunk.substr(start, end - start);
                     try {
-                        json data = json::parse(res->body);
-                        PublicEndpoint ep;
-                        ep.ip = data["public_ip"];
-                        ep.port = data["public_port"];
-                        ep.local_ip = data.contains("local_ip") ? data["local_ip"] : "";
-                        ep.local_port = data.contains("local_port") ? data["local_port"].get<uint16_t>() : 0;
-                        return ep;
+                        json parsed = json::parse(json_str);
+                        ep.ip = parsed["public_ip"];
+                        ep.port = parsed["public_port"];
+                        ep.local_ip = parsed.contains("local_ip") ? parsed["local_ip"] : "";
+                        ep.local_port = parsed.contains("local_port") ? parsed["local_port"].get<uint16_t>() : 0;
+                        received = true;
+                        return false; // Stop reading events
                     } catch (std::exception& e) {
-                        std::cerr << "Poll parse error: " << e.what() << std::endl;
-                    } catch (...) {
-                         std::cerr << "Poll parse error: Unknown" << std::endl;
+                        std::cerr << "SSE parse error: " << e.what() << std::endl;
                     }
                 }
             }
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            
+            // Check timeout
+            auto elapsed = std::chrono::steady_clock::now() - timeout_start;
+            if (elapsed > timeout_duration) {
+                return false; // Stop reading on timeout
+            }
+            
+            return true; // Continue reading events
+        });
+        
+        if (received) {
+            return ep;
         }
-        throw std::runtime_error("Timeout waiting for peer signal");
+        
+        throw std::runtime_error("Timeout waiting for peer signal (SSE connection failed)");
     }
 
     // Perform UDP hole punching to peer's public endpoint using an EXISTING socket

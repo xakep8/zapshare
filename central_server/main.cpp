@@ -2,12 +2,55 @@
 
 #include <iostream>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <map>
+#include <vector>
+#include <memory>
 
 #include "database.hpp"
 #include "httplib.h"
 #include "json.hpp"
 
 using json = nlohmann::json;
+
+// SSE signal management
+struct SignalManager {
+    std::mutex mutex;
+    std::map<std::string, json> signal_store;
+    std::map<std::string, std::vector<std::shared_ptr<std::condition_variable>>> waiters;
+    
+    void set_signal(const std::string& id, const json& data) {
+        std::lock_guard<std::mutex> lock(mutex);
+        signal_store[id] = data;
+        
+        // Notify all waiting clients for this id
+        if (waiters.count(id)) {
+            for (auto& cv : waiters[id]) {
+                cv->notify_all();
+            }
+            waiters[id].clear();
+        }
+    }
+    
+    json get_signal(const std::string& id) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (signal_store.count(id)) {
+            return signal_store[id];
+        }
+        return nullptr;
+    }
+    
+    std::shared_ptr<std::condition_variable> register_waiter(const std::string& id) {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto cv = std::make_shared<std::condition_variable>();
+        waiters[id].push_back(cv);
+        return cv;
+    }
+};
+
+static SignalManager signal_manager;
+
 
 int main() {
     DB::init();
@@ -86,18 +129,13 @@ int main() {
 
     // Simple in-memory storage for signaling (id -> json)
     // Note: In a production environment, this should probably be in the database or Redis
-    // using a static map for simplicity here as DB schema update wasn't requested in plan
-    static std::mutex signal_mutex;
-    static std::map<std::string, json> signal_store;
+    // Now using SSE for real-time notification instead of polling
 
     svr.Post(R"(/signal/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches[1];
         try {
             json data = json::parse(req.body);
-            {
-                std::lock_guard<std::mutex> lock(signal_mutex);
-                signal_store[id] = data;
-            }
+            signal_manager.set_signal(id, data);
             std::cout << "Signal received for " << id << ": " << data.dump() << std::endl;
             res.status = httplib::StatusCode::OK_200;
         } catch (std::exception& e) {
@@ -108,11 +146,40 @@ int main() {
 
     svr.Get(R"(/signal/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches[1];
-        std::lock_guard<std::mutex> lock(signal_mutex);
-        if (signal_store.count(id)) {
-            res.set_content(signal_store[id].dump(), "application/json");
+        
+        // Set SSE content type and headers
+        res.set_header("Content-Type", "text/event-stream");
+        res.set_header("Cache-Control", "no-cache");
+        res.set_header("Connection", "keep-alive");
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.status = httplib::StatusCode::OK_200;
+        
+        // Check if signal already exists (fast path, no wait needed)
+        json existing_signal = signal_manager.get_signal(id);
+        if (existing_signal != nullptr) {
+            std::string sse_data = "data: " + existing_signal.dump() + "\n\n";
+            res.set_content(sse_data, "text/event-stream");
+            return;
+        }
+        
+        // Register waiter and wait for signal with timeout
+        auto cv = signal_manager.register_waiter(id);
+        std::unique_lock<std::mutex> lock(signal_manager.mutex);
+        
+        // Wait up to 15 minutes for signal
+        auto timeout = std::chrono::seconds(900);
+        bool signaled = cv->wait_for(lock, timeout, [&id]() {
+            return signal_manager.get_signal(id) != nullptr;
+        });
+        
+        if (signaled) {
+            json signal_data = signal_manager.get_signal(id);
+            std::string sse_data = "data: " + signal_data.dump() + "\n\n";
+            res.set_content(sse_data, "text/event-stream");
         } else {
-            res.status = httplib::StatusCode::NotFound_404;
+            // Timeout - return 408 Request Timeout
+            res.status = httplib::StatusCode::RequestTimeout_408;
+            res.set_content("", "text/plain");
         }
     });
 
