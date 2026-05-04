@@ -4,8 +4,8 @@
 #include <thread>
 
 #include "database.hpp"
-#include "httplib.h"
-#include "json.hpp"
+#include "net/httplib.h"
+#include "json/json.hpp"
 
 using json = nlohmann::json;
 
