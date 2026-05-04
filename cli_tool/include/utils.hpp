@@ -11,8 +11,8 @@
 #include <string>
 #include <thread>
 
-#include "httplib.h"
-#include "json.hpp"
+#include "net/httplib.h"
+#include "json/json.hpp"
 #include "types.h"
 
 using json = nlohmann::json;

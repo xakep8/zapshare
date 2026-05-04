@@ -1,0 +1,11 @@
+{
+  "name": "zapshare",
+  "version": "0.1.0",
+  "dependencies": [
+    "protobuf",
+    "openssl",
+    "libpqxx",
+    "asio"
+  ],
+  "builtin-baseline": "522253caf47268c1724f486a035e927a42a90092"
+}
