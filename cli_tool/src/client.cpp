@@ -15,6 +15,13 @@
 
 using asio::ip::udp;
 
+namespace {
+
+constexpr char STUN_ENDPOINT[] = "stun.l.google.com";
+constexpr char STUN_PORT[] = "19302";
+
+}  // namespace
+
 bool run_client_session(const std::string& host, uint16_t port,
                         const std::string& token,
                         const std::string& output_filename) {
@@ -27,7 +34,7 @@ bool run_client_session(const std::string& host, uint16_t port,
     try {
         udp::endpoint stun_ep =
             *udp::resolver(io)
-                 .resolve(udp::v4(), "stun.l.google.com", "19302")
+                 .resolve(udp::v4(), STUN_ENDPOINT, STUN_PORT)
                  .begin();
         std::array<uint8_t, 20> req = {0, 1, 0, 0, 0x21, 0x12, 0xA4, 0x42};
         for (int i = 8; i < 20; ++i) req[i] = rand();
