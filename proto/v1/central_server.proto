@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package zapshare.v1;
+
+import "v1/common.proto";
+
+message RegisterTransferRequest {
+  TransferMetadata metadata = 1;
+}
+
+message RegisterTransferResponse {
+  bool   ok      = 1;
+  string message = 2;
+}
+
+message LookupTransferRequest {
+  string transfer_id = 1;
+}
+
+message LookupTransferResponse {
+  bool             found    = 1;
+  TransferMetadata metadata = 2;
+}
+
+message SignalPeerRequest {
+  string                     transfer_id       = 1;
+  repeated EndpointCandidate endpoints         = 2;
+  PeerIdentity               receiver_identity = 3;
+}
+
+message SignalPeerResponse {
+  bool   ok      = 1;
+  string message = 2;
+}
+
+message PollPeerRequest {
+  string transfer_id = 1;
+}
+
+message PollPeerResponse {
+  bool                       found             = 1;
+  repeated EndpointCandidate endpoints         = 2;
+  PeerIdentity               receiver_identity = 3;
+}

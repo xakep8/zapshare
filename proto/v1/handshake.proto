@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package zapshare.v1;
+
+import "v1/common.proto";
+
+message ClientHello {
+  ProtocolVersion version           = 1;
+  string          transfer_id       = 2;
+  string          token             = 3;
+  bytes           receiver_nonce    = 4;
+  PeerIdentity    receiver_identity = 5;
+
+  // Signature by receiver long-term private key over:
+  // version, transfer_id, token, receiver_nonce, receiver_identity.ephemeral_public_key
+  bytes receiver_signature = 6;
+}
+
+message ServerHello {
+  ProtocolVersion version         = 1;
+  string          transfer_id     = 2;
+  bytes           sender_nonce    = 3;
+  PeerIdentity    sender_identity = 4;
+
+  // Signature by sender long-term private key over:
+  // version, transfer_id, token, receiver_nonce, sender_nonce,
+  // receiver ephemeral pubkey, sender ephemeral pubkey
+  bytes sender_signature = 5;
+}
+
+message HandshakeFinish {
+  string transfer_id = 1;
+
+  // MAC or signature proving both sides derived/validated the same session context.
+  bytes transcript_proof = 2;
+}
+
+message HandshakeError {
+  ErrorCode code    = 1;
+  string    message = 2;
+}
+
+message HandshakePacket {
+  oneof body {
+    ClientHello     client_hello     = 1;
+    ServerHello     server_hello     = 2;
+    HandshakeFinish handshake_finish = 3;
+    HandshakeError  error            = 4;
+  }
+}
