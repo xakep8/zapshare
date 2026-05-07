@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package zapshare.v1;
+
+import "v1/common.proto";
+
+message GetRequest {
+  string transfer_id = 1;
+}
+
+message Ack {
+  string transfer_id = 1;
+  uint64 next_offset = 2;
+}
+
+message DataChunk {
+  string transfer_id = 1;
+  uint64 offset      = 2;
+  bytes  payload     = 3;
+}
+
+message Done {
+  string transfer_id = 1;
+  uint64 final_size  = 2;
+  string file_hash   = 3;
+}
+
+message TransferError {
+  string    transfer_id = 1;
+  ErrorCode code        = 2;
+  string    message     = 3;
+}
+
+message ControlPacket {
+  oneof body {
+    GetRequest    get   = 1;
+    Ack           ack   = 2;
+    DataChunk     data  = 3;
+    Done          done  = 4;
+    TransferError error = 5;
+  }
+}
+
+// This is the actual UDP payload after handshake.
+message SecurePacket {
+  ProtocolVersion version     = 1;
+  string          transfer_id = 2;
+  uint64          sequence    = 3;
+  bytes           nonce       = 4;
+  bytes           ciphertext  = 5;   // serialized ControlPacket, encrypted
+  bytes           auth_tag    = 6;     // AEAD tag if your crypto API doesn't append it
+}

@@ -3,7 +3,7 @@
 #include <iostream>
 #include <pqxx/pqxx>
 
-#include "json.hpp"
+#include "json/json.hpp"
 
 using json = nlohmann::json;
 
@@ -86,17 +86,18 @@ void create_transfers_table() {
 void create_tables() { create_transfers_table(); }
 
 // Convert pqxx::row into a TransferRow with safe defaults for NULLs
-TransferRow to_transfer_row(const pqxx::row& row) {
+template <typename RowLike>
+TransferRow to_transfer_row(const RowLike& row) {
     TransferRow t{};
-    t.id = row["id"].as<std::string>();
-    t.sender_ip = row["sender_ip"].as<std::string>();
-    t.sender_port = row["sender_port"].as<uint32_t>();
-    t.protocol = row["protocol"].as<std::string>();
-    t.file_name = row["file_name"].is_null() ? "" : row["file_name"].as<std::string>();
-    t.file_size = row["file_size"].is_null() ? 0 : row["file_size"].as<long>();
-    t.file_hash = row["file_hash"].is_null() ? "" : row["file_hash"].as<std::string>();
-    t.token = row["token"].as<std::string>();
-    t.claimed = row["claimed"].is_null() ? false : row["claimed"].as<bool>();
+    t.id = row["id"].template as<std::string>();
+    t.sender_ip = row["sender_ip"].template as<std::string>();
+    t.sender_port = row["sender_port"].template as<uint32_t>();
+    t.protocol = row["protocol"].template as<std::string>();
+    t.file_name = row["file_name"].is_null() ? "" : row["file_name"].template as<std::string>();
+    t.file_size = row["file_size"].is_null() ? 0 : row["file_size"].template as<long>();
+    t.file_hash = row["file_hash"].is_null() ? "" : row["file_hash"].template as<std::string>();
+    t.token = row["token"].template as<std::string>();
+    t.claimed = row["claimed"].is_null() ? false : row["claimed"].template as<bool>();
     t.created_at = row["created_at"].is_null() ? "" : row["created_at"].c_str();
     return t;
 }
