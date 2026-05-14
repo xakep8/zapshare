@@ -207,12 +207,11 @@ bool receive_file(asio::io_context& io, udp::socket& socket,
     while (retries < UdpConfig::MAX_RETRIES) {
         if (recv_with_timeout(io, socket, buf, sender, rx,
                               UdpConfig::RETRY_TIMEOUT_MS)) {
-            // Check if from connected_peer? or allow update?
-            // Ideally should be from connected_peer.
-            // But if IP check logic is loose, maybe ok.
-            // Let's stick to connected_peer for sending ACKs.
+            if (sender != peer) {
+                continue;
+            }
 
-            retries = 0;  // Reset retries on success
+            retries = 0;
 
             zapshare::v1::ControlPacket packet;
             if (!packet.ParseFromString(rx)) {
@@ -288,8 +287,7 @@ bool receive_file(asio::io_context& io, udp::socket& socket,
 
 }  // namespace
 
-bool run_client_session(const std::string& host, uint16_t port,
-                        const std::string& token,
+bool run_client_session(const std::string& token,
                         const std::string& output_filename) {
     asio::io_context io;
     udp::socket socket(io);
