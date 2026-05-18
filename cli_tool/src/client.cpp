@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "crypto.hpp"
+#include "crypto/session_crypto.hpp"
 #include "types.h"
 #include "utils.hpp"
 #include "v1/control.pb.h"
@@ -18,60 +19,10 @@ using asio::ip::udp;
 
 namespace {
 
-constexpr char STUN_ENDPOINT[] = "stun.l.google.com";
-constexpr char STUN_PORT[] = "19302";
-
-PublicEndpoint discover_and_signal_receiver(udp::socket& socket,
-                                            asio::io_context& io,
-                                            const std::string& token) {
-    udp::endpoint stun_ep =
-        *udp::resolver(io).resolve(udp::v4(), STUN_ENDPOINT, STUN_PORT).begin();
-    std::array<uint8_t, 20> req = {0, 1, 0, 0, 0x21, 0x12, 0xA4, 0x42};
-    for (int i = 8; i < 20; ++i) req[i] = rand();
-    socket.send_to(asio::buffer(req), stun_ep);
-
-    std::array<uint8_t, 1024> buf;
-    udp::endpoint sender;
-    size_t n = socket.receive_from(asio::buffer(buf), sender);
-
-    PublicEndpoint my_ep;
-    // Local IP/Port (from socket)
-    my_ep.local_ip = socket.local_endpoint().address().to_string();
-    my_ep.local_ip = Utils::get_local_ip_address();
-    my_ep.local_port = socket.local_endpoint().port();
-
-    // STUN Parsing (Short)
-    bool stun_success = false;
-    for (size_t i = 20; i + 8 <= n;) {
-        uint16_t t = (buf[i] << 8) | buf[i + 1],
-                 l = (buf[i + 2] << 8) | buf[i + 3];
-        if (t == 0x20 && l >= 8) {
-            uint32_t xk = 0x2112A442;
-            uint16_t p = ((buf[i + 6] << 8) | buf[i + 7]) ^ (xk >> 16);
-            uint32_t a = ((buf[i + 8] << 24) | (buf[i + 9] << 16) |
-                          (buf[i + 10] << 8) | buf[i + 11]) ^
-                         xk;
-            my_ep.port = p;
-            my_ep.ip = std::to_string(a >> 24) + "." +
-                       std::to_string((a >> 16) & 0xFF) + "." +
-                       std::to_string((a >> 8) & 0xFF) + "." +
-                       std::to_string(a & 0xFF);
-            stun_success = true;
-            break;
-        }
-        i += 4 + l + ((4 - (l % 4)) % 4);
-    }
-
-    if (!stun_success) throw std::runtime_error("STUN Parse failed");
-
-    std::cout << "Public Endpoint: " << my_ep.ip << ":" << my_ep.port
-              << std::endl;
-    std::cout << "Local Endpoint: " << my_ep.local_ip << ":" << my_ep.local_port
-              << std::endl;
-
-    Utils::signal_receiver_endpoint(token, my_ep);
-    return my_ep;
-}
+struct ConnectedPeer {
+    udp::endpoint endpoint;
+    SessionKeys keys;
+};
 
 std::vector<udp::endpoint> build_peer_candidates(const TRANSFERS& t) {
     std::vector<udp::endpoint> peers;
@@ -167,7 +118,6 @@ std::string build_get_request(const std::string& transfer_id) {
     zapshare::v1::ControlPacket control_packet;
     auto* get_request = control_packet.mutable_get();
 
-    // TODO: generate a uuid for the transfer and set transfer_id
     get_request->set_transfer_id(transfer_id);
 
     std::string get_bytes;
@@ -294,7 +244,9 @@ bool run_client_session(const std::string& token,
     socket.open(udp::v4());
     socket.bind(udp::endpoint(udp::v4(), 0));
 
-    PublicEndpoint endpoints = discover_and_signal_receiver(socket, io, token);
+    PublicEndpoint my_ep = Utils::get_public_endpoint_for_socket(io, socket);
+
+    Utils::signal_receiver_endpoint(token, my_ep);
 
     TRANSFERS t = Utils::get_transfer_metadata(token);
     std::vector<udp::endpoint> peers = build_peer_candidates(t);
