@@ -4,4 +4,5 @@
 #include <cstdint>
 #include <string>
 
-bool run_client_session(const std::string& host, uint16_t port, const std::string& token, const std::string& output_filename);
+bool run_client_session(const std::string& token,
+                        const std::string& output_filename);

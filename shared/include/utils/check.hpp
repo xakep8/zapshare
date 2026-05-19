@@ -6,12 +6,13 @@
 #include <cstdlib>
 #include <iostream>
 
-#define ZAPSHARE_CHECK_IMPL(condition, kind)                                 \
-    do {                                                                     \
-        if (!(condition)) {                                                  \
-            std::cerr << kind << "failed: " #condition << " at " << __FILE__ \
-                      << ":" __LINE__ << std::endl;                          \
-        }                                                                    \
+#define ZAPSHARE_CHECK_IMPL(condition, kind)                                  \
+    do {                                                                      \
+        if (!(condition)) {                                                   \
+            std::cerr << kind << " failed: " #condition << " at " << __FILE__ \
+                      << ":" << __LINE__ << std::endl;                        \
+            std::abort();                                                     \
+        }                                                                     \
     } while (false)
 
 #ifndef NDEBUG

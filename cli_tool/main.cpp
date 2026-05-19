@@ -86,9 +86,7 @@ int main(int argc, char* argv[]) {
             host_override.empty() ? peer_transfer.sender_ip : host_override;
 
         // Use Sender's IP and Port (5173 or whatever registered)
-        if (!run_client_session(
-                connect_host, static_cast<uint16_t>(peer_transfer.sender_port),
-                std::string(secret), peer_transfer.file_name)) {
+        if (!run_client_session(std::string(secret), peer_transfer.file_name)) {
             std::cerr << "File download failed" << std::endl;
             return 1;
         }
