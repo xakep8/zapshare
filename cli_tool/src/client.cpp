@@ -58,6 +58,20 @@ bool recv_with_timeout(asio::io_context& io, udp::socket& socket,
     return received;
 }
 
+std::string sign_client_hello(const zapshare::v1::ClientHello& hello,
+                              const IdentityKeyPair& receiver_identity) {
+    std::string transcript = "";
+    transcript += "client_hello";
+    transcript += std::to_string(hello.version());
+    transcript += hello.transfer_id();
+    transcript += hello.token();
+    transcript += hello.receiver_nonce();
+    const auto& identity = hello.receiver_identity();
+    transcript += identity.long_term_public_key();
+    transcript += identity.ephemeral_public_key();
+    return sign(transcript, receiver_identity);
+}
+
 std::optional<udp::endpoint> perform_handshake(
     asio::io_context& io, udp::socket& socket,
     const std::vector<udp::endpoint>& peers, PublicEndpoint& sender_ep,
@@ -75,11 +89,15 @@ std::optional<udp::endpoint> perform_handshake(
     hello->set_token(token);
 
     // TODO: need to implement
-    hello->set_receiver_nonce("");
-    hello->set_receiver_signature("");
+    IdentityKeyPair receiver_identity = generate_identity_keypair();
+    EphemeralKeyPair receiver_ephemeral = generate_ephemeral_keypair();
+    std::string receiver_nonce = random_nonce(32);
+    hello->set_receiver_nonce(receiver_nonce);
     auto* identity = hello->mutable_receiver_identity();
-    identity->set_ephemeral_public_key("");
-    identity->set_long_term_public_key("");
+    identity->set_ephemeral_public_key(receiver_ephemeral.public_key);
+    identity->set_long_term_public_key(receiver_identity.public_key);
+
+    hello->set_receiver_signature(sign_client_hello(*hello, receiver_identity));
 
     std::string bytes;
     handshake_packet.SerializeToString(&bytes);

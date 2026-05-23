@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "crypto/session_crypto.hpp"
 #include "types.h"
 #include "utils.hpp"
 #include "v1/control.pb.h"
@@ -17,6 +18,21 @@
 using asio::ip::udp;
 
 enum class State { WaitingHello, Authenticated, Transferring, Closed };
+
+namespace {
+std::string sign_server_hello(const zapshare::v1::ServerHello& hello,
+                              const IdentityKeyPair& sender_identity) {
+    std::string transcript = "";
+    transcript += "server_hello";
+    transcript += std::to_string(hello.version());
+    transcript += hello.transfer_id();
+    transcript += hello.sender_nonce();
+    const auto& identity = hello.sender_identity();
+    transcript += identity.long_term_public_key();
+    transcript += identity.ephemeral_public_key();
+    return sign(transcript, sender_identity);
+}
+}  // namespace
 
 class Session : public std::enable_shared_from_this<Session> {
    public:
@@ -114,11 +130,16 @@ class Session : public std::enable_shared_from_this<Session> {
         server_hello->set_transfer_id(hello.transfer_id());
 
         // TODO: need to complete
-        server_hello->set_sender_nonce("");
+        IdentityKeyPair server_identity = generate_identity_keypair();
+        EphemeralKeyPair server_ephemeral = generate_ephemeral_keypair();
+        std::string server_nonce = random_nonce(32);
+        server_hello->set_sender_nonce(server_nonce);
         auto* identity = server_hello->mutable_sender_identity();
-        identity->set_ephemeral_public_key("");
-        identity->set_long_term_public_key("");
-        server_hello->set_sender_signature("");
+        identity->set_ephemeral_public_key(server_ephemeral.public_key);
+        identity->set_long_term_public_key(server_identity.public_key);
+
+        server_hello->set_sender_signature(
+            sign_server_hello(*server_hello, server_identity));
 
         send_handshake_packet(response);
     }
