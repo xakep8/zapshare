@@ -10,7 +10,14 @@ find_package(asio CONFIG REQUIRED)
 set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
 
-add_executable(${PROJECT_NAME} src/client.cpp src/server.cpp main.cpp)
+add_executable(
+    ${PROJECT_NAME}
+    src/client.cpp
+    src/server.cpp
+    src/session.cpp
+    src/session_crypto_context.cpp
+    main.cpp
+)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE asio OpenSSL::SSL OpenSSL::Crypto)
 if(TARGET zapshare_shared)
