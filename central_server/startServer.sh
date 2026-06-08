@@ -2,4 +2,4 @@
 set -a
 source .env
 set +a
-exec ./out/bin/central_server
+exec ./build/debug/bin/central_server

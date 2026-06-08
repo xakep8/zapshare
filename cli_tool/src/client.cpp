@@ -12,6 +12,7 @@
 #include "crypto/session_crypto.hpp"
 #include "types.h"
 #include "utils.hpp"
+#include "v1/common.pb.h"
 #include "v1/control.pb.h"
 #include "v1/handshake.pb.h"
 
@@ -33,7 +34,7 @@ std::vector<udp::endpoint> build_peer_candidates(const TRANSFERS& t) {
         std::cout << "Added Sender Local Candidate: " << t.sender_local_ip
                   << ":" << t.sender_local_port << std::endl;
     }
-    return peers;
+    return std::move(peers);
 }
 
 bool recv_with_timeout(asio::io_context& io, udp::socket& socket,
@@ -58,8 +59,9 @@ bool recv_with_timeout(asio::io_context& io, udp::socket& socket,
     return received;
 }
 
-std::string sign_client_hello(const zapshare::v1::ClientHello& hello,
-                              const IdentityKeyPair& receiver_identity) {
+std::string sign_client_hello_transcript(
+    const zapshare::v1::ClientHello& hello,
+    const IdentityKeyPair& receiver_identity) {
     std::string transcript = "";
     transcript += "client_hello";
     transcript += std::to_string(hello.version());
@@ -72,7 +74,41 @@ std::string sign_client_hello(const zapshare::v1::ClientHello& hello,
     return sign(transcript, receiver_identity);
 }
 
-std::optional<udp::endpoint> perform_handshake(
+std::string build_server_hello_transcript(
+    const zapshare::v1::ServerHello& hello) {
+    std::string transcript;
+    transcript += "server_hello";
+    transcript += std::to_string(hello.version());
+    transcript += hello.transfer_id();
+    transcript += hello.sender_nonce();
+
+    const auto& identity = hello.sender_identity();
+    transcript += identity.long_term_public_key();
+    transcript += identity.ephemeral_public_key();
+
+    return transcript;
+}
+
+bool validate_server_hello(const zapshare::v1::ServerHello& server_hello,
+                           const std::string& token) {
+    if (server_hello.version() != zapshare::v1::PROTOCOL_VERSION_1)
+        return false;
+    if (server_hello.transfer_id() != token) return false;
+
+    if (server_hello.sender_nonce().empty()) return false;
+
+    if (server_hello.sender_identity().ephemeral_public_key().empty())
+        return false;
+
+    if (server_hello.sender_identity().long_term_public_key().empty())
+        return false;
+
+    if (server_hello.sender_signature().empty()) return false;
+
+    return true;
+}
+
+std::optional<ConnectedPeer> perform_handshake(
     asio::io_context& io, udp::socket& socket,
     const std::vector<udp::endpoint>& peers, PublicEndpoint& sender_ep,
     const std::string& token) {
@@ -97,13 +133,15 @@ std::optional<udp::endpoint> perform_handshake(
     identity->set_ephemeral_public_key(receiver_ephemeral.public_key);
     identity->set_long_term_public_key(receiver_identity.public_key);
 
-    hello->set_receiver_signature(sign_client_hello(*hello, receiver_identity));
+    hello->set_receiver_signature(
+        sign_client_hello_transcript(*hello, receiver_identity));
 
     std::string bytes;
     handshake_packet.SerializeToString(&bytes);
     std::string rx;
     bool connected = false;
     udp::endpoint connected_peer;
+    SessionKeys keys;
 
     for (int i = 0; i < UdpConfig::MAX_RETRIES; ++i) {
         // Send HELLO to All Candidates
@@ -117,16 +155,33 @@ std::optional<udp::endpoint> perform_handshake(
         zapshare::v1::HandshakePacket response;
         if (recv_with_timeout(io, socket, buf, sender, rx,
                               UdpConfig::RETRY_TIMEOUT_MS) &&
-            response.ParseFromString(rx) && response.has_server_hello() &&
-            response.server_hello().transfer_id() == token) {
+            response.ParseFromString(rx) && response.has_server_hello()) {
+            const auto& server_hello = response.server_hello();
+
+            if (!validate_server_hello(server_hello, token)) {
+                continue;
+            }
+
+            const std::string transcript =
+                build_server_hello_transcript(server_hello);
+
+            if (!verify_signature(
+                    transcript, server_hello.sender_signature(),
+                    server_hello.sender_identity().long_term_public_key())) {
+                continue;
+            }
+
             connected = true;
             connected_peer = sender;
+            keys = derive_client_keys(
+                receiver_ephemeral,
+                server_hello.sender_identity().ephemeral_public_key());
             break;
         }
         std::cout << "Handshake retry " << i + 1 << std::endl;
     }
     if (connected) {
-        return std::move(connected_peer);
+        return ConnectedPeer{.endpoint = connected_peer, .keys = keys};
     }
     return std::nullopt;
 }
@@ -282,11 +337,12 @@ bool run_client_session(const std::string& token,
         std::cerr << "Failed to connect to peer." << std::endl;
         return false;
     }
-    std::cout << "Connected to " << connected_peer->address().to_string() << ":"
-              << connected_peer->port() << std::endl;
+    std::cout << "Connected to "
+              << connected_peer->endpoint.address().to_string() << ":"
+              << connected_peer->endpoint.port() << std::endl;
 
     const std::string get_bytes = build_get_request(token);
 
-    return receive_file(io, socket, *connected_peer, token, output_filename,
-                        t.file_hash, get_bytes);
+    return receive_file(io, socket, connected_peer->endpoint, token,
+                        output_filename, t.file_hash, get_bytes);
 }
