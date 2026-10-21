@@ -162,8 +162,13 @@ class Receiver : public BaseTemplate {
                 std::cout << "GatheringState: " << state << "\n";
                 if (state == rtc::PeerConnection::GatheringState::Complete) {
                     auto description = m_peerConnection->localDescription();
-                    if (!description) return;
-                    if (description->typeString() != "answer") return;
+                    if (!description ||
+                        description->typeString() != "answer") {
+                        std::cerr
+                            << "[Receiver] Local answer was not generated\n";
+                        setState(State::Failed);
+                        return;
+                    }
                     json message = {{"type", description->typeString()},
                                     {"sdp", std::string(description.value())}};
                     std::cout << message << "\n";
@@ -186,10 +191,30 @@ class Receiver : public BaseTemplate {
                     std::cout << "[RECEIVER] DataChannel Open!\n";
                     setState(State::DCOpen);
                 });
+                m_dataChannel->onError([this](const std::string& error) {
+                    std::cerr << "[Receiver] DataChannel error: " << error
+                              << "\n";
+                    setState(State::Failed);
+                });
+                m_dataChannel->onClosed([this]() {
+                    if (getState() != State::MessageReceived) {
+                        std::cerr
+                            << "[Receiver] DataChannel closed before hello\n";
+                        setState(State::Failed);
+                    }
+                });
                 m_dataChannel->onMessage([this](rtc::message_variant message) {
                     if (auto text = std::get_if<std::string>(&message)) {
                         std::cout << "Message: " << *text << "\n";
-                        setState(State::MessageReceived);
+                        if (*text == "hello") {
+                            setState(State::MessageReceived);
+                        } else {
+                            std::cerr << "[Receiver] Unexpected message\n";
+                            setState(State::Failed);
+                        }
+                    } else {
+                        std::cerr << "[Receiver] Expected a text message\n";
+                        setState(State::Failed);
                     }
                 });
             });
@@ -230,6 +255,10 @@ class Receiver : public BaseTemplate {
             current = getState();
         }
         return true;
+    }
+    State waitForStateChange(State observed) const {
+        m_state.wait(observed, std::memory_order_acquire);
+        return getState();
     }
 };
 }  // namespace P2pConnection

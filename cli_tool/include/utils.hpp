@@ -118,14 +118,18 @@ inline std::optional<json> get_offer(const std::string& secret) {
     httplib::Client client(central_server_url());
     const std::string url = "/signal/" + secret + "/offer";
     auto res = client.Get(url);
-    if (!res) return std::nullopt;
+    if (!res) {
+        throw std::runtime_error("Offer request failed: " +
+                                 httplib::to_string(res.error()));
+    }
     if (res->status == httplib::StatusCode::OK_200) {
         return json::parse(res->body);
     }
-    if (res->status != httplib::StatusCode::NoContent_204) {
-        std::cerr << "Unexpected offer response: " << res->status << "\n";
+    if (res->status == httplib::StatusCode::NoContent_204) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    throw std::runtime_error("Unexpected offer response: HTTP " +
+                             std::to_string(res->status));
 }
 
 inline bool post_answer(const json& message, const std::string& secret) {
@@ -142,14 +146,18 @@ inline std::optional<json> get_answer(const std::string& secret) {
     httplib::Client client(central_server_url());
     const std::string url = "/signal/" + secret + "/answer";
     auto res = client.Get(url);
-    if (!res) return std::nullopt;
+    if (!res) {
+        throw std::runtime_error("Answer request failed: " +
+                                 httplib::to_string(res.error()));
+    }
     if (res->status == httplib::StatusCode::OK_200) {
         return json::parse(res->body);
     }
-    if (res->status != httplib::StatusCode::NoContent_204) {
-        std::cerr << "Unexpected answer response: " << res->status << "\n";
+    if (res->status == httplib::StatusCode::NoContent_204) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    throw std::runtime_error("Unexpected answer response: HTTP " +
+                             std::to_string(res->status));
 }
 
 inline Transfer_t get_transfer_metadata(const std::string_view& secret) {

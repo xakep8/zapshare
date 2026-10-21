@@ -30,22 +30,38 @@ int handle_get(const int argc, char* argv[]) {
     P2pConnection::Receiver rcvr;
     const std::string secret = argv[2];
     rcvr.start(secret);
-    while (rcvr.getState() == P2pConnection::Receiver::State::WaitingOffer) {
-        auto offer = Utils::get_offer(secret);
-        if (!offer) continue;
-        rcvr.acceptOffer(*offer);
-        break;
+
+    while (true) {
+        const auto state = rcvr.getState();
+        switch (state) {
+            case P2pConnection::Receiver::State::WaitingOffer: {
+                try {
+                    auto offer = Utils::get_offer(secret);
+                    if (offer) {
+                        std::cout << "Offer received; preparing answer\n";
+                        rcvr.acceptOffer(*offer);
+                    }
+                } catch (const std::exception& error) {
+                    std::cerr << "Failed to fetch offer: " << error.what()
+                              << "\n";
+                    return 1;
+                }
+                break;
+            }
+            case P2pConnection::Receiver::State::OfferReceived:
+            case P2pConnection::Receiver::State::PreparingAnswer:
+            case P2pConnection::Receiver::State::AnswerSent:
+            case P2pConnection::Receiver::State::DCOpen:
+                rcvr.waitForStateChange(state);
+                break;
+            case P2pConnection::Receiver::State::MessageReceived:
+                std::cout << "Receiver got hello successfully\n";
+                return 0;
+            case P2pConnection::Receiver::State::Failed:
+                std::cerr << "Receiver connection failed\n";
+                return 1;
+        }
     }
-    if (!rcvr.waitUntil(P2pConnection::Receiver::State::MessageReceived)) {
-        std::cerr << "Receiver connection failed\n";
-        return 1;
-    }
-    // Use Sender's IP and Port (5173 or whatever registered)
-    // if (!run_client_session(std::string(secret), peer_transfer.file_name)) {
-    //    std::cerr << "File download failed" << std::endl;
-    //    return 1;
-    //}
-    return 0;
 }
 
 int handle_send(const int argc, char* argv[]) {
@@ -80,10 +96,15 @@ int handle_send(const int argc, char* argv[]) {
     }
 
     while (sender.getState() == P2pConnection::Sender::State::OfferSent) {
-        auto answer = Utils::get_answer(transfer.token);
-        if (!answer) continue;
-        sender.applyAnswer(*answer);
-        break;
+        try {
+            auto answer = Utils::get_answer(transfer.token);
+            if (!answer) continue;
+            sender.applyAnswer(*answer);
+            break;
+        } catch (const std::exception& error) {
+            std::cerr << "Failed to fetch answer: " << error.what() << "\n";
+            return 1;
+        }
     }
 
     if (!sender.waitUntil(P2pConnection::Sender::State::DCOpen)) {
