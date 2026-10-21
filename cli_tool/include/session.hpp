@@ -36,7 +36,7 @@ class Session : public std::enable_shared_from_this<Session> {
     void handle_get_request(const zapshare::v1::GetRequest& get);
     void handle_ack(const zapshare::v1::Ack& ack);
     void handle_control_packet(const std::string& data);
-    void send_message(const std::string& msg);
+    void send_raw_bytes(const std::string& msg);
     void resend_current_chunk();
     void send_next_chunk();
     bool validate_token(const std::string& token);
@@ -61,6 +61,6 @@ class Session : public std::enable_shared_from_this<Session> {
     size_t m_last_chunk_size = 0;
     bool m_last_chunk_done = false;
     std::string m_last_packet_cache;
-    TRANSFERS m_transfer_metadata{};
+    Transfer_t m_transfer_metadata{};
     SessionCryptoContext m_session_crypto;
 };

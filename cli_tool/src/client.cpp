@@ -20,12 +20,7 @@ using asio::ip::udp;
 
 namespace {
 
-struct ConnectedPeer {
-    udp::endpoint endpoint;
-    SessionKeys keys;
-};
-
-std::vector<udp::endpoint> build_peer_candidates(const TRANSFERS& t) {
+std::vector<udp::endpoint> build_peer_candidates(const Transfer_t& t) {
     std::vector<udp::endpoint> peers;
     peers.emplace_back(asio::ip::make_address(t.sender_ip), t.sender_port);
     if (!t.sender_local_ip.empty() && t.sender_local_port != 0) {
@@ -35,28 +30,6 @@ std::vector<udp::endpoint> build_peer_candidates(const TRANSFERS& t) {
                   << ":" << t.sender_local_port << std::endl;
     }
     return std::move(peers);
-}
-
-bool recv_with_timeout(asio::io_context& io, udp::socket& socket,
-                       std::array<char, UdpConfig::MAX_PACKET_SIZE>& buffer,
-                       udp::endpoint& sender, std::string& data,
-                       int timeout_ms) {
-    bool received = false;
-    asio::steady_timer timer(io, std::chrono::milliseconds(timeout_ms));
-    socket.async_receive_from(asio::buffer(buffer), sender,
-                              [&](asio::error_code ec, size_t len) {
-                                  if (!ec) {
-                                      received = true;
-                                      data.assign(buffer.data(), len);
-                                      timer.cancel();
-                                  }
-                              });
-    timer.async_wait([&](auto) {
-        if (!received) socket.cancel();
-    });
-    io.restart();
-    io.run();
-    return received;
 }
 
 std::string sign_client_hello_transcript(
@@ -108,11 +81,197 @@ bool validate_server_hello(const zapshare::v1::ServerHello& server_hello,
     return true;
 }
 
-std::optional<ConnectedPeer> perform_handshake(
-    asio::io_context& io, udp::socket& socket,
-    const std::vector<udp::endpoint>& peers, PublicEndpoint& sender_ep,
-    const std::string& token) {
-    Utils::perform_udp_hole_punch(socket, sender_ep);
+}  // namespace
+
+Client::Client()
+    : m_token(), m_output_filename(), m_context(), m_socket(m_context) {}
+
+Client::Client(const std::string& token, const std::string& output_filename)
+    : m_context(), m_socket(m_context) {
+    m_token = token;
+    m_output_filename = output_filename;
+}
+
+bool Client::run() {
+    if (!discover_and_signal_receiver()) {
+        std::cerr << "Failed to Signal server" << std::endl;
+        return false;
+    }
+    if (!perform_handshake()) {
+        std::cerr << "Failed to connect to peer." << std::endl;
+        return false;
+    }
+    std::cout << "Connected to "
+              << m_connected_peer->endpoint.address().to_string() << ":"
+              << m_connected_peer->endpoint.port() << std::endl;
+
+    if (!send_get_request()) {
+        std::cerr << "Get Request Send Failed!\n";
+        return false;
+    }
+
+    return receive_file(m_connected_peer->endpoint);
+}
+
+std::string Client::build_get_request() const {
+    // Get File
+    zapshare::v1::ControlPacket control_packet;
+    auto* get_request = control_packet.mutable_get();
+
+    get_request->set_transfer_id(m_token);
+
+    std::string get_bytes;
+    control_packet.SerializeToString(&get_bytes);
+    return get_bytes;
+}
+
+std::string Client::build_ack(uint64_t next_offset) const {
+    zapshare::v1::ControlPacket ack_packet;
+    auto* ack = ack_packet.mutable_ack();
+    ack->set_transfer_id(m_transfer_data.id);
+    ack->set_next_offset(next_offset);
+
+    std::string bytes;
+    if (!ack_packet.SerializeToString(&bytes)) {
+        std::cerr << "SerializeToString failed!\n";
+        return "";
+    }
+    return bytes;
+}
+
+bool Client::send_get_request() {
+    const std::string get_request = build_get_request();
+    const std::string encrypted_request =
+        m_crypto.encrypt_outgoing(get_request);
+    m_socket.send_to(asio::buffer(encrypted_request),
+                     m_connected_peer->endpoint);
+    return true;
+}
+
+bool Client::discover_and_signal_receiver() {
+    m_socket.open(udp::v4());
+    m_socket.bind(udp::endpoint(udp::v4(), 0));
+
+    PublicEndpoint my_ep =
+        Utils::get_public_endpoint_for_socket(m_context, m_socket);
+
+    Utils::signal_receiver_endpoint(m_token, my_ep);
+
+    m_transfer_data = Utils::get_transfer_metadata(m_token);
+
+    m_peer_candidates = build_peer_candidates(m_transfer_data);
+
+    m_sender_ep.ip = m_transfer_data.sender_ip;
+    m_sender_ep.port = static_cast<uint16_t>(m_transfer_data.sender_port);
+    m_sender_ep.local_ip = m_transfer_data.sender_local_ip;
+    m_sender_ep.local_port =
+        static_cast<uint16_t>(m_transfer_data.sender_local_port);
+
+    return true;
+}
+
+bool Client::send_ack(uint64_t next_offset) {
+    std::string ack_bytes = build_ack(next_offset);
+    std::string encrypted_request = m_crypto.encrypt_outgoing(ack_bytes);
+    m_socket.send_to(asio::buffer(encrypted_request),
+                     m_connected_peer->endpoint);
+    return true;
+}
+
+bool Client::receive_file(const udp::endpoint& endpoint) {
+    std::ofstream out(m_output_filename, std::ios::binary | std::ios::trunc);
+
+    std::array<char, UdpConfig::MAX_PACKET_SIZE> buf;
+    udp::endpoint sender;
+    std::string rx;
+
+    int retries = 0;
+    while (retries < UdpConfig::MAX_RETRIES) {
+        if (recv_with_timeout(sender, rx)) {
+            if (sender != m_connected_peer->endpoint) {
+                continue;
+            }
+
+            retries = 0;
+
+            std::string decrypted_request{};
+            if (!m_crypto.decrypt_incoming(rx, &decrypted_request)) {
+                continue;
+            }
+            zapshare::v1::ControlPacket packet;
+            if (!packet.ParseFromString(decrypted_request)) {
+                continue;
+            }
+            if (packet.has_data()) {
+                const auto& data = packet.data();
+                if (data.transfer_id() != m_transfer_data.id) {
+                    continue;
+                }
+                const size_t off = static_cast<size_t>(data.offset());
+                const std::string& payload = data.payload();
+
+                if (off == m_current_offset) {
+                    out.seekp(off);
+                    out.write(payload.data(),
+                              static_cast<std::streamsize>(payload.size()));
+                    m_current_offset += payload.size();
+                    std::cout << "Received: " << m_current_offset << " bytes"
+                              << std::flush;
+                    send_ack(m_current_offset);
+                } else if (off < m_current_offset) {
+                    send_ack(m_current_offset);
+                }
+            }
+
+            if (packet.has_done()) {
+                const auto& done = packet.done();
+
+                if (done.transfer_id() != m_transfer_data.id) {
+                    continue;
+                }
+
+                if (m_current_offset != done.final_size()) {
+                    continue;
+                }
+
+                out.flush();
+                out.close();
+
+                const std::string file_hash =
+                    Crypto::compute_file_hash(m_output_filename);
+
+                if (file_hash != m_transfer_data.file_hash) {
+                    std::cerr << "\nFile hash mismatch." << std::endl;
+                    return false;
+                }
+                send_ack(m_current_offset);
+                std::cout << "\nTransfer Complete!" << std::endl;
+                return true;
+            }
+
+            if (packet.has_error()) {
+                std::cerr << "Peer returned error: " << packet.error().message()
+                          << std::endl;
+                return false;
+            }
+        } else {
+            // Timeout
+            std::cout << "\rTimeout, resending ACK... " << std::flush;
+            retries++;
+
+            if (m_current_offset == 0) {
+                send_get_request();
+            } else {
+                send_ack(m_current_offset);
+            }
+        }
+    }
+    std::cerr << "\nClient timed out." << std::endl;
+    return false;
+}
+
+bool Client::perform_handshake() {
+    Utils::perform_udp_hole_punch(m_socket, m_sender_ep);
 
     std::array<char, UdpConfig::MAX_PACKET_SIZE> buf;
     udp::endpoint sender;  // Packet source
@@ -121,10 +280,9 @@ std::optional<ConnectedPeer> perform_handshake(
     zapshare::v1::HandshakePacket handshake_packet;
     auto* hello = handshake_packet.mutable_client_hello();
     hello->set_version(zapshare::v1::PROTOCOL_VERSION_1);
-    hello->set_transfer_id(token);
-    hello->set_token(token);
+    hello->set_transfer_id(m_token);
+    hello->set_token(m_token);
 
-    // TODO: need to implement
     IdentityKeyPair receiver_identity = generate_identity_keypair();
     EphemeralKeyPair receiver_ephemeral = generate_ephemeral_keypair();
     std::string receiver_nonce = random_nonce(32);
@@ -145,20 +303,19 @@ std::optional<ConnectedPeer> perform_handshake(
 
     for (int i = 0; i < UdpConfig::MAX_RETRIES; ++i) {
         // Send HELLO to All Candidates
-        for (const auto& p : peers) {
+        for (const auto& p : m_peer_candidates) {
             try {
-                socket.send_to(asio::buffer(bytes), p);
+                m_socket.send_to(asio::buffer(bytes), p);
             } catch (...) {
             }
         }
 
         zapshare::v1::HandshakePacket response;
-        if (recv_with_timeout(io, socket, buf, sender, rx,
-                              UdpConfig::RETRY_TIMEOUT_MS) &&
-            response.ParseFromString(rx) && response.has_server_hello()) {
+        if (recv_with_timeout(sender, rx) && response.ParseFromString(rx) &&
+            response.has_server_hello()) {
             const auto& server_hello = response.server_hello();
 
-            if (!validate_server_hello(server_hello, token)) {
+            if (!validate_server_hello(server_hello, m_token)) {
                 continue;
             }
 
@@ -176,173 +333,42 @@ std::optional<ConnectedPeer> perform_handshake(
             keys = derive_client_keys(
                 receiver_ephemeral,
                 server_hello.sender_identity().ephemeral_public_key());
+            m_crypto.set_session_keys(keys);
             break;
         }
         std::cout << "Handshake retry " << i + 1 << std::endl;
     }
     if (connected) {
-        return ConnectedPeer{.endpoint = connected_peer, .keys = keys};
+        m_connected_peer =
+            ConnectedPeer{.endpoint = connected_peer, .keys = keys};
+        return true;
     }
-    return std::nullopt;
-}
-
-std::string build_get_request(const std::string& transfer_id) {
-    // Get File
-    zapshare::v1::ControlPacket control_packet;
-    auto* get_request = control_packet.mutable_get();
-
-    get_request->set_transfer_id(transfer_id);
-
-    std::string get_bytes;
-    control_packet.SerializeToString(&get_bytes);
-    return get_bytes;
-}
-
-bool send_ack(udp::socket& socket, const udp::endpoint& peer,
-              const std::string& transfer_id, uint64_t next_offset) {
-    zapshare::v1::ControlPacket ack_packet;
-    auto* ack = ack_packet.mutable_ack();
-    ack->set_transfer_id(transfer_id);
-    ack->set_next_offset(next_offset);
-
-    std::string ack_bytes;
-    if (!ack_packet.SerializeToString(&ack_bytes)) return false;
-    socket.send_to(asio::buffer(ack_bytes), peer);
-    return true;
-}
-
-bool receive_file(asio::io_context& io, udp::socket& socket,
-                  const udp::endpoint& peer, const std::string& transfer_id,
-                  const std::string& output_filename,
-                  const std::string& expected_hash,
-                  const std::string& get_bytes) {
-    std::ofstream out(output_filename, std::ios::binary | std::ios::trunc);
-    socket.send_to(asio::buffer(get_bytes), peer);
-
-    std::array<char, UdpConfig::MAX_PACKET_SIZE> buf;
-    udp::endpoint sender;
-    std::string rx;
-
-    // Stop-and-Wait Loop
-    size_t current_offset = 0;
-
-    int retries = 0;
-    while (retries < UdpConfig::MAX_RETRIES) {
-        if (recv_with_timeout(io, socket, buf, sender, rx,
-                              UdpConfig::RETRY_TIMEOUT_MS)) {
-            if (sender != peer) {
-                continue;
-            }
-
-            retries = 0;
-
-            zapshare::v1::ControlPacket packet;
-            if (!packet.ParseFromString(rx)) {
-                continue;
-            }
-            if (packet.has_data()) {
-                const auto& data = packet.data();
-                if (data.transfer_id() != transfer_id) {
-                    continue;
-                }
-                const size_t off = static_cast<size_t>(data.offset());
-                const std::string& payload = data.payload();
-
-                if (off == current_offset) {
-                    out.seekp(off);
-                    out.write(payload.data(),
-                              static_cast<std::streamsize>(payload.size()));
-                    current_offset += payload.size();
-                    std::cout << "Received: " << current_offset << " bytes"
-                              << std::flush;
-                    send_ack(socket, peer, transfer_id, current_offset);
-                } else if (off < current_offset) {
-                    send_ack(socket, peer, transfer_id, current_offset);
-                }
-            }
-
-            if (packet.has_done()) {
-                const auto& done = packet.done();
-
-                if (done.transfer_id() != transfer_id) {
-                    continue;
-                }
-
-                if (current_offset != done.final_size()) {
-                    continue;
-                }
-
-                out.flush();
-                out.close();
-
-                const std::string file_hash =
-                    Crypto::compute_file_hash(output_filename);
-
-                if (file_hash != expected_hash) {
-                    std::cerr << "\nFile hash mismatch." << std::endl;
-                    return false;
-                }
-                send_ack(socket, peer, transfer_id, current_offset);
-                std::cout << "\nTransfer Complete!" << std::endl;
-                return true;
-            }
-
-            if (packet.has_error()) {
-                std::cerr << "Peer returned error: " << packet.error().message()
-                          << std::endl;
-                return false;
-            }
-        } else {
-            // Timeout
-            std::cout << "\rTimeout, resending ACK... " << std::flush;
-            retries++;
-
-            if (current_offset == 0) {
-                socket.send_to(asio::buffer(get_bytes), peer);
-            } else {
-                send_ack(socket, peer, transfer_id, current_offset);
-            }
-        }
-    }
-    std::cerr << "\nClient timed out." << std::endl;
+    m_connected_peer = std::nullopt;
     return false;
 }
 
-}  // namespace
-
 bool run_client_session(const std::string& token,
                         const std::string& output_filename) {
-    asio::io_context io;
-    udp::socket socket(io);
-    socket.open(udp::v4());
-    socket.bind(udp::endpoint(udp::v4(), 0));
+    Client client(token, output_filename);
+    return client.run();
+}
 
-    PublicEndpoint my_ep = Utils::get_public_endpoint_for_socket(io, socket);
-
-    Utils::signal_receiver_endpoint(token, my_ep);
-
-    TRANSFERS t = Utils::get_transfer_metadata(token);
-    std::vector<udp::endpoint> peers = build_peer_candidates(t);
-
-    PublicEndpoint sender_ep;
-    sender_ep.ip = t.sender_ip;
-    sender_ep.port = static_cast<uint16_t>(t.sender_port);
-    sender_ep.local_ip = t.sender_local_ip;
-    sender_ep.local_port = static_cast<uint16_t>(t.sender_local_port);
-
-    auto connected_peer =
-        perform_handshake(io, socket, peers, sender_ep, token);
-
-    if (!connected_peer) {
-        std::cerr << "Failed to connect to peer." << std::endl;
-        return false;
-    }
-    std::cout << "Connected to "
-              << connected_peer->endpoint.address().to_string() << ":"
-              << connected_peer->endpoint.port() << std::endl;
-
-    const std::string get_bytes = build_get_request(token);
-
-    return receive_file(io, socket, connected_peer->endpoint, token,
-                        output_filename, t.file_hash, get_bytes);
+bool Client::recv_with_timeout(udp::endpoint& sender, std::string& data) {
+    bool received = false;
+    asio::steady_timer timer(
+        m_context, std::chrono::milliseconds(UdpConfig::RETRY_TIMEOUT_MS));
+    m_socket.async_receive_from(asio::buffer(m_buffer), sender,
+                                [&](asio::error_code ec, size_t len) {
+                                    if (!ec) {
+                                        received = true;
+                                        data.assign(m_buffer.data(), len);
+                                        timer.cancel();
+                                    }
+                                });
+    timer.async_wait([&](auto) {
+        if (!received) m_socket.cancel();
+    });
+    m_context.restart();
+    m_context.run();
+    return received;
 }

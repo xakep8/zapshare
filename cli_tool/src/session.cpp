@@ -102,8 +102,9 @@ void Session::send_control_packet(const zapshare::v1::ControlPacket packet) {
     if (!packet.SerializeToString(&bytes)) {
         return;
     }
-
-    m_socket.send_to(asio::buffer(bytes), m_remote_endpoint);
+    std::string encrypted_control_pkt =
+        m_session_crypto.encrypt_outgoing(bytes);
+    m_socket.send_to(asio::buffer(encrypted_control_pkt), m_remote_endpoint);
 }
 
 void Session::send_handshake_error(zapshare::v1::ErrorCode code,
@@ -244,7 +245,12 @@ void Session::handle_ack(const zapshare::v1::Ack& ack) {
 void Session::handle_control_packet(const std::string& data) {
     zapshare::v1::ControlPacket packet;
 
-    if (!packet.ParseFromString(data)) {
+    std::string decrypted_control{};
+    if (!m_session_crypto.decrypt_incoming(data, &decrypted_control)) {
+        return;
+    }
+
+    if (!packet.ParseFromString(decrypted_control)) {
         return;
     }
 
@@ -264,7 +270,7 @@ void Session::handle_control_packet(const std::string& data) {
     }
 }
 
-void Session::send_message(const std::string& msg) {
+void Session::send_raw_bytes(const std::string& msg) {
     m_socket.send_to(asio::buffer(msg), m_remote_endpoint);
 }
 
@@ -291,8 +297,9 @@ void Session::send_next_chunk() {
         done->set_file_hash(m_transfer_metadata.file_hash);
         std::string bytes;
         done_packet.SerializeToString(&bytes);
-        send_message(bytes);
-        m_last_packet_cache = bytes;
+        std::string encrypted_bytes = m_session_crypto.encrypt_outgoing(bytes);
+        send_raw_bytes(encrypted_bytes);
+        m_last_packet_cache = encrypted_bytes;
         m_last_chunk_done = true;
         m_last_chunk_size = 0;
         std::cout << "Sent DONE." << std::endl;
@@ -310,9 +317,10 @@ void Session::send_next_chunk() {
 
     std::string bytes;
     data_packet.SerializeToString(&bytes);
+    std::string encrypted_bytes = m_session_crypto.encrypt_outgoing(bytes);
 
-    m_last_packet_cache = bytes;  // Cache for retransmission
-    m_socket.send_to(asio::buffer(bytes), m_remote_endpoint);
+    m_last_packet_cache = encrypted_bytes;  // Cache for retransmission
+    send_raw_bytes(encrypted_bytes);
 }
 
 bool Session::validate_token(const std::string& token) {

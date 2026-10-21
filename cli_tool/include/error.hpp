@@ -2,7 +2,10 @@
 
 namespace Error {
 inline void print_usage() {
-    std::cerr << "usage:\n" << "    zapshare send [filepath]\n" << "    zapshare get [secret]\n";
+    std::cerr << "usage:\n"
+              << "    zapshare send [filepath]\n"
+              << "    zapshare get [secret]\n"
+              << "    zapshare hello\n";
 }
 
 inline void invalid_secret() {

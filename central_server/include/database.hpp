@@ -18,7 +18,7 @@ typedef struct Transfer_Payload {
     size_t file_size;
     std::string file_hash;
     std::string token;
-} TRANSFERS;
+} Transfer_t;
 
 // Full row representation returned from DB (includes nullable columns)
 struct TransferRow {
@@ -60,11 +60,11 @@ pqxx::connection& conn() {
     return *connection;
 }
 
-void create_transfers_table() {
+void create_Transfer_t_table() {
     pqxx::work txn(conn());
 
     txn.exec(R"(
-        CREATE TABLE IF NOT EXISTS transfers (
+        CREATE TABLE IF NOT EXISTS Transfer_t (
             id TEXT PRIMARY KEY,
             sender_ip TEXT NOT NULL,
             sender_port INTEGER NOT NULL,
@@ -80,10 +80,10 @@ void create_transfers_table() {
 
     txn.commit();
 
-    std::cout << " Table 'transfers' created\n";
+    std::cout << " Table 'Transfer_t' created\n";
 }
 
-void create_tables() { create_transfers_table(); }
+void create_tables() { create_Transfer_t_table(); }
 
 // Convert pqxx::row into a TransferRow with safe defaults for NULLs
 template <typename RowLike>
@@ -115,9 +115,9 @@ inline json transfer_row_to_json(const TransferRow& t) {
                 {"created_at", t.created_at}};
 }
 
-inline TRANSFERS transfer_row_from_json(const json& data) {
+inline Transfer_t transfer_row_from_json(const json& data) {
     try {
-        TRANSFERS t;
+        Transfer_t t;
         t.id = data["id"];
         t.sender_ip = data["sender_ip"];
         t.sender_port = data["sender_port"];
@@ -150,7 +150,7 @@ bool lookup_transfer(const std::string_view secret) {
     pqxx::read_transaction txn(conn());
 
     try {
-        pqxx::result r = txn.exec_params("SELECT * FROM transfers WHERE id = $1", std::string(secret));
+        pqxx::result r = txn.exec_params("SELECT * FROM Transfer_t WHERE id = $1", std::string(secret));
 
         return !r.empty();
     } catch (const std::exception& e) {
@@ -162,7 +162,7 @@ bool lookup_transfer(const std::string_view secret) {
 void mark_transfer_claimed(const std::string_view secret) {
     pqxx::work txn(conn());
     try {
-        txn.exec_params("UPDATE transfers SET claimed = true WHERE id = $1", std::string(secret));
+        txn.exec_params("UPDATE Transfer_t SET claimed = true WHERE id = $1", std::string(secret));
         txn.commit();
     } catch (std::exception& e) {
         std::cerr << "ERROR: " << e.what() << "\n";
@@ -170,11 +170,11 @@ void mark_transfer_claimed(const std::string_view secret) {
     }
 }
 
-TransferRow get_transfers_metadata(const std::string_view secret) {
+TransferRow get_Transfer_t_metadata(const std::string_view secret) {
     pqxx::read_transaction txn(conn());
 
     try {
-        pqxx::result r = txn.exec_params("SELECT * FROM transfers WHERE id = $1", std::string(secret));
+        pqxx::result r = txn.exec_params("SELECT * FROM Transfer_t WHERE id = $1", std::string(secret));
         txn.commit();
         mark_transfer_claimed(secret);
         TransferRow data = to_transfer_row(r[0]);
@@ -185,13 +185,13 @@ TransferRow get_transfers_metadata(const std::string_view secret) {
     }
 }
 
-bool register_transfers(const json data) {
+bool register_Transfer_t(const json data) {
     pqxx::work txn(conn());
     try {
-        TRANSFERS payload = transfer_row_from_json(data);
+        Transfer_t payload = transfer_row_from_json(data);
         txn.exec_params(
             R"(
-            INSERT INTO transfers (
+            INSERT INTO Transfer_t (
                 id,
                 sender_ip,
                 sender_port,

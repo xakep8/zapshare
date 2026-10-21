@@ -14,6 +14,9 @@ class SessionCryptoContext {
     bool set_session_keys(const SessionKeys& keys);
     bool set_transfer(const udp::endpoint& peer,
                       const std::string_view& transfer_id);
+    std::string encrypt_outgoing(const std::string& plain_text);
+    bool decrypt_incoming(const std::string& cipher_text,
+                          std::string* plain_text);
 
     bool has_keys() const;
     SessionKeys get_session_keys() const;

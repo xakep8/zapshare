@@ -15,6 +15,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_MANIFEST_INSTALL": "ON",
         "ZAPSHARE_BUILD_TESTS": "ON",
         "ZAPSHARE_BUILD_PROTO": "ON"
       }
@@ -28,6 +29,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_MANIFEST_INSTALL": "ON",
         "ZAPSHARE_BUILD_TESTS": "ON",
         "ZAPSHARE_BUILD_PROTO": "ON"
       }

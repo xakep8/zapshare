@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 
 #include <asio.hpp>
@@ -41,10 +42,12 @@ inline const char* get_env(const char* key) {
     return value;
 }
 
-inline const char* CENTRAL_SERVER_URL = get_env("CENTRAL_SERVER_URL");
+inline const char* central_server_url() {
+    return get_env("CENTRAL_SERVER_URL");
+}
 
-inline TRANSFERS transfer_metadata_from_json(const json& data) {
-    TRANSFERS t;
+inline Transfer_t transfer_metadata_from_json(const json& data) {
+    Transfer_t t;
     t.id = data["id"];
 
     // Unpack sender_ip (Format: PublicIP;LocalIP:LocalPort)
@@ -91,7 +94,7 @@ inline bool check_file_exists(const std::string_view& filepath) {
 }
 
 inline bool look_up(const std::string_view secret) {
-    httplib::Client client(CENTRAL_SERVER_URL);
+    httplib::Client client(central_server_url());
     const std::string url = "/lookup/" + std::string(secret);
     if (auto res = client.Get(url)) {
         if (res->body == "True") {
@@ -101,8 +104,56 @@ inline bool look_up(const std::string_view secret) {
     return false;
 }
 
-inline TRANSFERS get_transfer_metadata(const std::string_view& secret) {
-    httplib::Client client(CENTRAL_SERVER_URL);
+inline bool post_offer(const json& message, const std::string& secret) {
+    httplib::Client client(central_server_url());
+    const std::string url = "/signal/" + secret + "/offer";
+    if (auto res = client.Post(url, message.dump(), "application/json")) {
+        return res->status == httplib::StatusCode::OK_200;
+    } else {
+        return false;
+    }
+}
+
+inline std::optional<json> get_offer(const std::string& secret) {
+    httplib::Client client(central_server_url());
+    const std::string url = "/signal/" + secret + "/offer";
+    auto res = client.Get(url);
+    if (!res) return std::nullopt;
+    if (res->status == httplib::StatusCode::OK_200) {
+        return json::parse(res->body);
+    }
+    if (res->status != httplib::StatusCode::NoContent_204) {
+        std::cerr << "Unexpected offer response: " << res->status << "\n";
+    }
+    return std::nullopt;
+}
+
+inline bool post_answer(const json& message, const std::string& secret) {
+    httplib::Client client(central_server_url());
+    const std::string url = "/signal/" + secret + "/answer";
+    if (auto res = client.Post(url, message.dump(), "application/json")) {
+        return res->status == httplib::StatusCode::OK_200;
+    } else {
+        return false;
+    }
+}
+
+inline std::optional<json> get_answer(const std::string& secret) {
+    httplib::Client client(central_server_url());
+    const std::string url = "/signal/" + secret + "/answer";
+    auto res = client.Get(url);
+    if (!res) return std::nullopt;
+    if (res->status == httplib::StatusCode::OK_200) {
+        return json::parse(res->body);
+    }
+    if (res->status != httplib::StatusCode::NoContent_204) {
+        std::cerr << "Unexpected answer response: " << res->status << "\n";
+    }
+    return std::nullopt;
+}
+
+inline Transfer_t get_transfer_metadata(const std::string_view& secret) {
+    httplib::Client client(central_server_url());
     const std::string url = "/getfile/" + std::string(secret);
     if (auto res = client.Get(url)) {
         return transfer_metadata_from_json(json::parse(res->body));
@@ -182,7 +233,7 @@ inline PublicEndpoint get_public_endpoint() {
 // Register discovered public endpoint with central server (Signaling)
 inline void signal_receiver_endpoint(const std::string& id,
                                      const PublicEndpoint& endpoint) {
-    httplib::Client client(CENTRAL_SERVER_URL);
+    httplib::Client client(central_server_url());
     json payload = {{"public_ip", endpoint.ip},
                     {"public_port", endpoint.port},
                     {"local_ip", endpoint.local_ip},
@@ -196,7 +247,7 @@ inline void signal_receiver_endpoint(const std::string& id,
 
 // Poll for receiver's public endpoint (Signaling)
 inline PublicEndpoint poll_for_signal(const std::string& id) {
-    httplib::Client client(CENTRAL_SERVER_URL);
+    httplib::Client client(central_server_url());
     std::string url = "/signal/" + id;
 
     for (int i = 0; i < 30; ++i) {  // Try for 30 seconds
@@ -282,8 +333,8 @@ inline std::string generate_uuid_token() {
 }
 
 // Register transfer metadata with rendezvous server
-inline void register_transfer(const TRANSFERS& t) {
-    httplib::Client client(CENTRAL_SERVER_URL);
+inline void register_transfer(const Transfer_t& t) {
+    httplib::Client client(central_server_url());
 
     // Pack Local IP into sender_ip for legacy server compatibility
     std::string packed_ip = t.sender_ip;

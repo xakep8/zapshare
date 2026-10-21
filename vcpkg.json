@@ -1,12 +1,14 @@
 {
   "name": "zapshare",
   "version": "0.1.0",
+  "builtin-baseline": "a1cae005c39be7b18ba319fced856b68d7276271",
   "dependencies": [
-    "protobuf",
-    "openssl",
-    "libpqxx",
     "asio",
-    "libsodium"
-  ],
-  "builtin-baseline": "522253caf47268c1724f486a035e927a42a90092"
+    "libdatachannel",
+    "libpqxx",
+    "libsodium",
+    "openssl",
+    "protobuf",
+    "boost-redis"
+  ]
 }

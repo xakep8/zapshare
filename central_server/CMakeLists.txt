@@ -8,23 +8,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
 find_package(libpqxx CONFIG REQUIRED)
+find_package(Boost REQUIRED COMPONENTS redis)
 
 add_executable(${PROJECT_NAME} main.cpp)
 
 target_include_directories(${PROJECT_NAME} PRIVATE include)
 
-target_link_libraries(
-    ${PROJECT_NAME}
-    PRIVATE libpqxx::pqxx OpenSSL::SSL OpenSSL::Crypto
-)
+target_link_libraries(${PROJECT_NAME} PRIVATE libpqxx::pqxx OpenSSL::SSL
+                                              OpenSSL::Crypto Boost::redis)
 
 # Link shared utilities (protocols, crypto helpers, protobuf messages)
 if(TARGET zapshare_shared)
-    target_link_libraries(${PROJECT_NAME} PRIVATE zapshare_shared)
+  target_link_libraries(${PROJECT_NAME} PRIVATE zapshare_shared)
 endif()
-set_target_properties(
-    ${PROJECT_NAME}
-    PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
+set_target_properties(${PROJECT_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                                 ${CMAKE_BINARY_DIR}/bin)
 
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
