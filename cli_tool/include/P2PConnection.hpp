@@ -5,6 +5,7 @@
 #include <iostream>
 #include <json/json.hpp>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -55,12 +56,13 @@ class Sender : public BaseTemplate {
         setState(State::PreparingOffer);
         m_config.iceServers.emplace_back("stun.l.google.com", 19302);
         m_peerConnection = std::make_shared<rtc::PeerConnection>(m_config);
-        m_peerConnection->onStateChange([this](rtc::PeerConnection::State state) {
-            std::cout << "State: " << state << "\n";
-            if (state == rtc::PeerConnection::State::Failed) {
-                setState(State::Failed);
-            }
-        });
+        m_peerConnection->onStateChange(
+            [this](rtc::PeerConnection::State state) {
+                std::cout << "State: " << state << "\n";
+                if (state == rtc::PeerConnection::State::Failed) {
+                    setState(State::Failed);
+                }
+            });
         m_peerConnection->onGatheringStateChange(
             [this, secret](rtc::PeerConnection::GatheringState state) {
                 std::cout << "GatheringState: " << state << "\n";
@@ -127,6 +129,16 @@ class Sender : public BaseTemplate {
         }
         return true;
     }
+    void sendBytes(std::string_view bytes) {
+        if (!m_dataChannel || !m_dataChannel->isOpen()) {
+            throw std::runtime_error(
+                "[Send Bytes] DataChannel is not available\n");
+        }
+
+        const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
+        rtc::binary payload(begin, begin + bytes.size());
+        m_dataChannel->send(std::move(payload));
+    };
 };
 
 class Receiver : public BaseTemplate {
@@ -151,19 +163,19 @@ class Receiver : public BaseTemplate {
         setState(State::WaitingOffer);
         m_config.iceServers.emplace_back("stun.l.google.com", 19302);
         m_peerConnection = std::make_shared<rtc::PeerConnection>(m_config);
-        m_peerConnection->onStateChange([this](rtc::PeerConnection::State state) {
-            std::cout << "State: " << state << "\n";
-            if (state == rtc::PeerConnection::State::Failed) {
-                setState(State::Failed);
-            }
-        });
+        m_peerConnection->onStateChange(
+            [this](rtc::PeerConnection::State state) {
+                std::cout << "State: " << state << "\n";
+                if (state == rtc::PeerConnection::State::Failed) {
+                    setState(State::Failed);
+                }
+            });
         m_peerConnection->onGatheringStateChange(
             [this, secret](rtc::PeerConnection::GatheringState state) {
                 std::cout << "GatheringState: " << state << "\n";
                 if (state == rtc::PeerConnection::GatheringState::Complete) {
                     auto description = m_peerConnection->localDescription();
-                    if (!description ||
-                        description->typeString() != "answer") {
+                    if (!description || description->typeString() != "answer") {
                         std::cerr
                             << "[Receiver] Local answer was not generated\n";
                         setState(State::Failed);
@@ -260,5 +272,6 @@ class Receiver : public BaseTemplate {
         m_state.wait(observed, std::memory_order_acquire);
         return getState();
     }
+    void onBytes(std::function<void(std::string)> callback) {};
 };
 }  // namespace P2pConnection
