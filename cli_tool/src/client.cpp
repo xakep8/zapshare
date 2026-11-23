@@ -86,11 +86,13 @@ bool validate_server_hello(const zapshare::v1::ServerHello& server_hello,
 Client::Client()
     : m_token(), m_output_filename(), m_context(), m_socket(m_context) {}
 
-Client::Client(const std::string& token, const std::string& output_filename)
-    : m_context(), m_socket(m_context) {
-    m_token = token;
-    m_output_filename = output_filename;
-}
+Client::Client(const std::string& token, const std::string& output_filename,
+               SendBytes sendBytes)
+    : m_context(),
+      m_socket(m_context),
+      m_token(token),
+      m_output_filename(output_filename),
+      m_sendBytes(std::move(sendBytes)) {}
 
 bool Client::run() {
     if (!discover_and_signal_receiver()) {
@@ -347,12 +349,6 @@ bool Client::perform_handshake() {
     return false;
 }
 
-bool run_client_session(const std::string& token,
-                        const std::string& output_filename) {
-    Client client(token, output_filename);
-    return client.run();
-}
-
 bool Client::recv_with_timeout(udp::endpoint& sender, std::string& data) {
     bool received = false;
     asio::steady_timer timer(
@@ -371,4 +367,14 @@ bool Client::recv_with_timeout(udp::endpoint& sender, std::string& data) {
     m_context.restart();
     m_context.run();
     return received;
+}
+
+void Client::handle_packet(const std::string& data) {
+    const auto state = getState();
+    if (state) {
+    }
+}
+
+void Client::start() {
+    std::cout << "Client ready. Waiting for peer..." << std::endl;
 }

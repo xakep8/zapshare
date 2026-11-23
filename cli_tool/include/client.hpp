@@ -16,6 +16,9 @@ using asio::ip::udp;
 
 class Client {
    public:
+    enum class State : uint8_t {
+        WaitingHello,
+    };
     using SendBytes = std::function<void(std::string_view)>;
     struct ConnectedPeer {
         udp::endpoint endpoint;
