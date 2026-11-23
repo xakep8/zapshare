@@ -1,13 +1,15 @@
+
 #include <iostream>
+#include <memory>
 
 #include "P2PConnection.hpp"
-#include "asio.hpp"
 #include "client.hpp"
 #include "crypto.hpp"
 #include "error.hpp"
 #include "include/P2PConnection.hpp"
 #include "include/utils.hpp"
 #include "server.hpp"
+#include "session.hpp"
 #include "types.h"
 #include "utils.hpp"
 
@@ -29,6 +31,14 @@ int handle_get(const int argc, char* argv[]) {
     }
     P2pConnection::Receiver rcvr;
     const std::string secret = argv[2];
+    rcvr.onBytes([&rcvr](std::string bytes) {
+        std::cout << "Message: " << bytes << "\n";
+        if (bytes == "hello") {
+            rcvr.setState(P2pConnection::Receiver::State::MessageReceived);
+        } else {
+            rcvr.setState(P2pConnection::Receiver::State::Failed);
+        }
+    });
     rcvr.start(secret);
 
     while (true) {
@@ -69,9 +79,6 @@ int handle_send(const int argc, char* argv[]) {
         Error::invalid_file_path();
         return 1;
     }
-    // P2pConnection::Sender sender;
-    // sender.send_hello();
-    // return 0;
     const std::string_view filepath = argv[2];
     if (!Utils::check_file_exists(filepath)) {
         Error::invalid_file_path();
@@ -81,13 +88,25 @@ int handle_send(const int argc, char* argv[]) {
     transfer.file_name = std::filesystem::path(filepath).filename().string();
     transfer.file_hash = Crypto::compute_file_hash(filepath);
     transfer.file_size = std::filesystem::file_size(filepath);
-    transfer.protocol = "udp";
+    transfer.protocol = "webrtc";
     transfer.sender_port = 5173;
     transfer.token = Utils::generate_uuid_token();
     transfer.id = transfer.token;
     std::cout << "Your secret is: " << transfer.token << "\n";
+    Utils::register_transfer(transfer);
 
     P2pConnection::Sender sender;
+    auto session = std::make_shared<Session>(
+        [&sender](std::string_view bytes) { sender.sendBytes(bytes); },
+        std::string(filepath));
+
+    sender.onBytes(
+        [weak_session = std::weak_ptr<Session>(session)](std::string bytes) {
+            if (auto session = weak_session.lock()) {
+                session->handle_packet(bytes);
+            }
+        });
+    session->start();
     sender.start(transfer.token);
 
     if (!sender.waitUntil(P2pConnection::Sender::State::OfferSent)) {
@@ -111,6 +130,7 @@ int handle_send(const int argc, char* argv[]) {
         std::cerr << "Sender connection failed\n";
         return 1;
     }
+    session->waitUntilClosed();
     return 0;
 }
 

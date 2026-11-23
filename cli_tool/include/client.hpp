@@ -16,6 +16,7 @@ using asio::ip::udp;
 
 class Client {
    public:
+    using SendBytes = std::function<void(std::string_view)>;
     struct ConnectedPeer {
         udp::endpoint endpoint;
         SessionKeys keys;
@@ -24,10 +25,12 @@ class Client {
     Client();
 
     explicit Client(const std::string& token,
-                    const std::string& output_filename);
+                    const std::string& output_filename, SendBytes sendBytes);
 
     ~Client() = default;
 
+    void start();
+    void handle_packet(const std::string& data);
     bool run();
 
    private:
@@ -56,6 +59,7 @@ class Client {
 
     uint64_t m_current_offset = 0;
     std::string m_cached_get_packet;
+    SendBytes m_sendBytes;
 };
 
 bool run_client_session(const std::string& token,

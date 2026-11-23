@@ -1,32 +1,38 @@
 #pragma once
 
 #include <array>
-#include <asio.hpp>
 #include <fstream>
+#include <functional>
 #include <memory>
-#include <sstream>
 #include <string>
+#include <string_view>
 
 #include "session_crypto_context.hpp"
 #include "types.h"
 #include "v1/control.pb.h"
 #include "v1/handshake.pb.h"
 
-using asio::ip::udp;
-
 class Session : public std::enable_shared_from_this<Session> {
    public:
-    Session(udp::socket& socket, udp::endpoint remote_endpoint,
-            const std::string& file_path);
+    enum class ConnectionState : uint8_t {
+        WaitingHello,
+        Authenticated,
+        Transferring,
+        Closed
+    };
+    using SendBytes = std::function<void(std::string_view)>;
+    Session(SendBytes sendBytes, const std::string& file_path);
 
     void start();
     bool is_closed() const;
-    void handle_packet(const std::string& data,
-                       const asio::ip::udp::endpoint& sender);
+    void handle_packet(const std::string& data);
+    void setState(ConnectionState state);
+    ConnectionState getState() const;
+    void waitUntilClosed() const;
 
    private:
     void send_handshake_packet(const zapshare::v1::HandshakePacket& packet);
-    void send_control_packet(const zapshare::v1::ControlPacket packet);
+    void send_control_packet(const zapshare::v1::ControlPacket& packet);
     void send_handshake_error(zapshare::v1::ErrorCode code,
                               const std::string& message);
     void send_control_error(const std::string& transfer_id,
@@ -41,19 +47,10 @@ class Session : public std::enable_shared_from_this<Session> {
     void send_next_chunk();
     bool validate_token(const std::string& token);
 
-   public:
-    enum class ConnectionState : uint8_t {
-        WaitingHello,
-        Authenticated,
-        Transferring,
-        Closed
-    };
-
    private:
-    udp::socket& m_socket;
-    udp::endpoint m_remote_endpoint;
+    SendBytes m_sendBytes;
     std::string m_file_path;
-    ConnectionState m_state = ConnectionState::WaitingHello;
+    std::atomic<ConnectionState> m_state{ConnectionState::WaitingHello};
     std::ifstream m_file;
     std::string m_file_id;
     std::array<char, UdpConfig::MAX_PACKET_SIZE> m_chunk_buffer;

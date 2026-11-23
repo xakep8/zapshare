@@ -5,8 +5,11 @@
 #include <iostream>
 #include <json/json.hpp>
 #include <memory>
+#include <rtc/common.hpp>
+#include <rtc/datachannel.hpp>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -16,7 +19,40 @@
 using json = nlohmann::json;
 
 namespace P2pConnection {
-static class BaseTemplate {
+class BaseTemplate {
+   public:
+    using BytesHandler = std::function<void(std::string)>;
+    void onBytes(BytesHandler handler) { m_onBytes = std::move(handler); }
+
+   protected:
+    void attachDataChannel(std::shared_ptr<rtc::DataChannel> dc) {
+        m_dataChannel = std::move(dc);
+        m_dataChannel->onMessage([this](rtc::message_variant message) {
+            const auto* binary = std::get_if<rtc::binary>(&message);
+            if (!binary) {
+                std::cerr << "Expected binary message\n";
+                return;
+            }
+            if (m_onBytes) {
+                const auto* data =
+                    reinterpret_cast<const char*>(binary->data());
+                m_onBytes(std::string(data, binary->size()));
+            }
+        });
+    };
+
+   public:
+    void sendBytes(std::string_view bytes) {
+        if (!m_dataChannel || !m_dataChannel->isOpen()) {
+            throw std::runtime_error(
+                "[Send Bytes] DataChannel is not available\n");
+        }
+
+        const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
+        rtc::binary payload(begin, begin + bytes.size());
+        m_dataChannel->send(std::move(payload));
+    };
+
    protected:
     std::shared_ptr<rtc::PeerConnection> m_peerConnection;
     rtc::Configuration m_config;
@@ -26,6 +62,9 @@ static class BaseTemplate {
    public:
     BaseTemplate() = default;
     virtual ~BaseTemplate() = default;
+
+   private:
+    BytesHandler m_onBytes;
 };
 
 class Sender : public BaseTemplate {
@@ -87,11 +126,15 @@ class Sender : public BaseTemplate {
             std::cout << "Candidate Found: " << candidate << "\n";
             m_candidates.push_back(candidate);
         });
-        m_dataChannel = m_peerConnection->createDataChannel("hello");
+        attachDataChannel(m_peerConnection->createDataChannel("zapshare"));
         m_dataChannel->onOpen([this]() {
             std::cout << "Sender data channel open; sending hello\n";
-            m_dataChannel->send(std::string("hello"));
-            setState(State::DCOpen);
+            try {
+                setState(State::DCOpen);
+            } catch (const std::exception& e) {
+                std::cerr << "Error: " << e.what() << "\n";
+                setState(State::Failed);
+            }
         });
         m_peerConnection->setLocalDescription(rtc::Description::Type::Offer);
     };
@@ -129,16 +172,6 @@ class Sender : public BaseTemplate {
         }
         return true;
     }
-    void sendBytes(std::string_view bytes) {
-        if (!m_dataChannel || !m_dataChannel->isOpen()) {
-            throw std::runtime_error(
-                "[Send Bytes] DataChannel is not available\n");
-        }
-
-        const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
-        rtc::binary payload(begin, begin + bytes.size());
-        m_dataChannel->send(std::move(payload));
-    };
 };
 
 class Receiver : public BaseTemplate {
@@ -198,7 +231,7 @@ class Receiver : public BaseTemplate {
         });
         m_peerConnection->onDataChannel(
             [this](std::shared_ptr<rtc::DataChannel> channel) {
-                m_dataChannel = channel;
+                attachDataChannel(std::move(channel));
                 m_dataChannel->onOpen([this]() {
                     std::cout << "[RECEIVER] DataChannel Open!\n";
                     setState(State::DCOpen);
@@ -212,20 +245,6 @@ class Receiver : public BaseTemplate {
                     if (getState() != State::MessageReceived) {
                         std::cerr
                             << "[Receiver] DataChannel closed before hello\n";
-                        setState(State::Failed);
-                    }
-                });
-                m_dataChannel->onMessage([this](rtc::message_variant message) {
-                    if (auto text = std::get_if<std::string>(&message)) {
-                        std::cout << "Message: " << *text << "\n";
-                        if (*text == "hello") {
-                            setState(State::MessageReceived);
-                        } else {
-                            std::cerr << "[Receiver] Unexpected message\n";
-                            setState(State::Failed);
-                        }
-                    } else {
-                        std::cerr << "[Receiver] Expected a text message\n";
                         setState(State::Failed);
                     }
                 });
@@ -272,6 +291,5 @@ class Receiver : public BaseTemplate {
         m_state.wait(observed, std::memory_order_acquire);
         return getState();
     }
-    void onBytes(std::function<void(std::string)> callback) {};
 };
 }  // namespace P2pConnection
