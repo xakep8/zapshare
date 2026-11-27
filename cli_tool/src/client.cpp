@@ -5,6 +5,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -94,26 +95,26 @@ Client::Client(const std::string& token, const std::string& output_filename,
       m_output_filename(output_filename),
       m_sendBytes(std::move(sendBytes)) {}
 
-bool Client::run() {
-    if (!discover_and_signal_receiver()) {
-        std::cerr << "Failed to Signal server" << std::endl;
-        return false;
-    }
-    if (!perform_handshake()) {
-        std::cerr << "Failed to connect to peer." << std::endl;
-        return false;
-    }
-    std::cout << "Connected to "
-              << m_connected_peer->endpoint.address().to_string() << ":"
-              << m_connected_peer->endpoint.port() << std::endl;
-
-    if (!send_get_request()) {
-        std::cerr << "Get Request Send Failed!\n";
-        return false;
-    }
-
-    return receive_file(m_connected_peer->endpoint);
-}
+// bool Client::run() {
+//     if (!discover_and_signal_receiver()) {
+//         std::cerr << "Failed to Signal server" << std::endl;
+//         return false;
+//     }
+//     if (!perform_handshake()) {
+//         std::cerr << "Failed to connect to peer." << std::endl;
+//         return false;
+//     }
+//     std::cout << "Connected to "
+//               << m_connected_peer->endpoint.address().to_string() << ":"
+//               << m_connected_peer->endpoint.port() << std::endl;
+//
+//     if (!send_get_request()) {
+//         std::cerr << "Get Request Send Failed!\n";
+//         return false;
+//     }
+//
+//     return receive_file(m_connected_peer->endpoint);
+// }
 
 std::string Client::build_get_request() const {
     // Get File
@@ -145,8 +146,7 @@ bool Client::send_get_request() {
     const std::string get_request = build_get_request();
     const std::string encrypted_request =
         m_crypto.encrypt_outgoing(get_request);
-    m_socket.send_to(asio::buffer(encrypted_request),
-                     m_connected_peer->endpoint);
+    m_sendBytes(encrypted_request);
     return true;
 }
 
@@ -175,8 +175,7 @@ bool Client::discover_and_signal_receiver() {
 bool Client::send_ack(uint64_t next_offset) {
     std::string ack_bytes = build_ack(next_offset);
     std::string encrypted_request = m_crypto.encrypt_outgoing(ack_bytes);
-    m_socket.send_to(asio::buffer(encrypted_request),
-                     m_connected_peer->endpoint);
+    m_sendBytes(encrypted_request);
     return true;
 }
 
@@ -369,12 +368,145 @@ bool Client::recv_with_timeout(udp::endpoint& sender, std::string& data) {
     return received;
 }
 
-void Client::handle_packet(const std::string& data) {
-    const auto state = getState();
-    if (state) {
+void Client::handleHandshakePacket(const std::string& data) {
+    zapshare::v1::HandshakePacket response;
+    response.ParseFromString(data);
+    const auto& serverHello = response.server_hello();
+    if (!validate_server_hello(serverHello, m_token)) {
+        setState(State::Failed);
+        throw std::runtime_error("Invalid Sender Reponse!");
+        return;
+    }
+
+    const std::string transcript = build_server_hello_transcript(serverHello);
+
+    if (!verify_signature(
+            transcript, serverHello.sender_signature(),
+            serverHello.sender_identity().long_term_public_key())) {
+        setState(State::Failed);
+        throw std::runtime_error("Invalid Sender Identity!");
+        return;
+    }
+    SessionKeys keys = derive_client_keys(
+        m_receiverEphemeral,
+        serverHello.sender_identity().ephemeral_public_key());
+    m_crypto.set_session_keys(keys);
+
+    const std::string getRequest = build_get_request();
+    const std::string encryptedRequest = m_crypto.encrypt_outgoing(getRequest);
+    m_sendBytes(encryptedRequest);
+    setState(State::Receiving);
+}
+
+void Client::handleControlPacket(const std::string& data) {
+    std::string decryptedRequest;
+    if (!m_crypto.decrypt_incoming(data, &decryptedRequest)) {
+        setState(State::Failed);
+        throw std::runtime_error("Failed to decrypt ControlPacket");
+        return;
+    }
+    zapshare::v1::ControlPacket chunk;
+    if (!chunk.ParseFromString(decryptedRequest)) {
+        setState(State::Failed);
+        throw std::runtime_error("Failed to parse ControlPacket");
+        return;
+    }
+    std::ofstream out(m_output_filename, std::ios::binary | std::ios::trunc);
+    if (!chunk.has_data()) {
+        const auto& packetData = chunk.data();
+        if (packetData.transfer_id() != m_transfer_data.id) {
+            setState(State::Failed);
+            throw std::runtime_error("Transfer ID message");
+            return;
+        }
+        const size_t offset = static_cast<size_t>(packetData.offset());
+        const std::string& payload = packetData.payload();
+
+        if (offset == m_current_offset) {
+            out.seekp(offset);
+            out.write(payload.data(),
+                      static_cast<std::streamsize>(payload.size()));
+            m_current_offset += payload.size();
+            std::cout << "Received: " << m_current_offset << " bytes"
+                      << std::flush;
+            send_ack(m_current_offset);
+        } else if (offset < m_current_offset) {
+            send_ack(m_current_offset);
+        }
+    }
+
+    if (chunk.has_done()) {
+        const auto& done = chunk.done();
+        if (done.transfer_id() != m_transfer_data.id) {
+            setState(State::Failed);
+            throw std::runtime_error("Transfer ID message");
+            return;
+        }
+
+        if (m_current_offset != done.final_size()) {
+            setState(State::Failed);
+            throw std::runtime_error("Final size doesn't match");
+            return;
+        }
+
+        out.flush();
+        out.close();
+
+        const std::string fileHash =
+            Crypto::compute_file_hash(m_output_filename);
+        if (fileHash != m_transfer_data.file_hash) {
+            setState(State::Failed);
+            throw std::runtime_error("File hash mismatch.");
+            return;
+        }
+        send_ack(m_current_offset);
+        std::cout << "\nTransfer Complete!" << std::endl;
     }
 }
 
+void Client::handle_packet(const std::string& data) {
+    const auto state = getState();
+    if (state == State::Closed || state == State::Failed) return;
+
+    if (state == State::WaitingHello) {
+        handleHandshakePacket(data);
+        return;
+    }
+
+    if (state == State::Receiving) {
+        handleControlPacket(data);
+    }
+}
+
+Client::State Client::getState() const {
+    return m_state.load(std::memory_order_acquire);
+}
+
+void Client::setState(State state) {
+    m_state.store(state, std::memory_order_release);
+    m_state.notify_all();
+}
+
 void Client::start() {
-    std::cout << "Client ready. Waiting for peer..." << std::endl;
+    zapshare::v1::HandshakePacket handshakePacket;
+    auto* hello = handshakePacket.mutable_client_hello();
+    hello->set_version(zapshare::v1::PROTOCOL_VERSION_1);
+    hello->set_transfer_id(m_token);
+    hello->set_token(m_token);
+
+    IdentityKeyPair receiverIdentity = generate_identity_keypair();
+    m_receiverEphemeral = generate_ephemeral_keypair();
+    std::string receiverNonce = random_nonce(32);
+    hello->set_receiver_nonce(receiverNonce);
+    auto* identity = hello->mutable_receiver_identity();
+    identity->set_ephemeral_public_key(m_receiverEphemeral.public_key);
+    identity->set_long_term_public_key(receiverIdentity.public_key);
+    hello->set_receiver_signature(
+        sign_client_hello_transcript(*hello, receiverIdentity));
+
+    std::string bytes;
+    handshakePacket.SerializeToString(&bytes);
+    m_sendBytes(bytes);
+    std::cout << "Client ready. Waiting for Sender..." << std::endl;
+    setState(State::WaitingHello);
 }

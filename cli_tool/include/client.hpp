@@ -3,6 +3,7 @@
 #include <array>
 #include <asio.hpp>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -14,10 +15,14 @@
 
 using asio::ip::udp;
 
-class Client {
+class Client : public std::enable_shared_from_this<Client> {
    public:
     enum class State : uint8_t {
+        Idle,
         WaitingHello,
+        Receiving,
+        Closed,
+        Failed
     };
     using SendBytes = std::function<void(std::string_view)>;
     struct ConnectedPeer {
@@ -34,9 +39,14 @@ class Client {
 
     void start();
     void handle_packet(const std::string& data);
-    bool run();
+    State getState() const;
+    void setState(State state);
+    void waitUntilClosed() const;
+    bool is_closed() const;
 
    private:
+    void handleHandshakePacket(const std::string& data);
+    void handleControlPacket(const std::string& data);
     bool perform_handshake();
     bool send_get_request();
     bool discover_and_signal_receiver();
@@ -59,10 +69,12 @@ class Client {
     std::vector<asio::ip::udp::endpoint> m_peer_candidates;
     std::optional<ConnectedPeer> m_connected_peer;
     SessionCryptoContext m_crypto;
+    EphemeralKeyPair m_receiverEphemeral;
 
     uint64_t m_current_offset = 0;
     std::string m_cached_get_packet;
     SendBytes m_sendBytes;
+    std::atomic<State> m_state{State::Idle};
 };
 
 bool run_client_session(const std::string& token,
