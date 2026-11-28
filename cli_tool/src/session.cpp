@@ -1,6 +1,8 @@
 #include "session.hpp"
 
+#include <atomic>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 #include "crypto/session_crypto.hpp"
@@ -55,33 +57,34 @@ bool validate_client_hello(const zapshare::v1::ClientHello& hello) {
 }
 }  // namespace
 
-Session::Session(asio::ip::udp::socket& socket,
-                 asio::ip::udp::endpoint remote_endpoint,
-                 const std::string& file_path)
-    : m_socket(socket),
-      m_remote_endpoint(remote_endpoint),
-      m_file_path(file_path) {}
+Session::Session(SendBytes sendBytes, const std::string& file_path)
+    : m_sendBytes(std::move(sendBytes)), m_file_path(file_path) {
+    if (!m_sendBytes) {
+        throw std::invalid_argument("Session requires a send function!\n");
+    }
+}
 
 void Session::start() {
     std::cout << "Session ready. Waiting for peer..." << std::endl;
 }
 
-bool Session::is_closed() const { return m_state == ConnectionState::Closed; }
+bool Session::is_closed() const {
+    const auto state = getState();
+    return state == ConnectionState::Closed;
+}
 
-void Session::handle_packet(const std::string& data,
-                            const asio::ip::udp::endpoint& sender) {
-    if (m_state == ConnectionState::Closed) return;
+void Session::handle_packet(const std::string& data) {
+    const auto state = getState();
+    if (state == ConnectionState::Closed) return;
 
-    if (m_state == ConnectionState::WaitingHello) {
-        m_remote_endpoint = sender;
+    if (state == ConnectionState::WaitingHello) {
         handle_handshake_packet(data);
         return;
     }
 
-    if (m_state == ConnectionState::Authenticated ||
-        m_state == ConnectionState::Transferring) {
+    if (state == ConnectionState::Authenticated ||
+        state == ConnectionState::Transferring) {
         handle_control_packet(data);
-        return;
     }
 }
 
@@ -94,16 +97,17 @@ void Session::send_handshake_packet(
         return;
     }
 
-    m_socket.send_to(asio::buffer(bytes), m_remote_endpoint);
+    m_sendBytes(bytes);
 }
 
-void Session::send_control_packet(const zapshare::v1::ControlPacket packet) {
+void Session::send_control_packet(const zapshare::v1::ControlPacket& packet) {
     std::string bytes;
     if (!packet.SerializeToString(&bytes)) {
         return;
     }
-
-    m_socket.send_to(asio::buffer(bytes), m_remote_endpoint);
+    std::string encrypted_control_pkt =
+        m_session_crypto.encrypt_outgoing(bytes);
+    m_sendBytes(encrypted_control_pkt);
 }
 
 void Session::send_handshake_error(zapshare::v1::ErrorCode code,
@@ -144,32 +148,32 @@ void Session::handle_handshake_packet(const std::string& data) {
     if (hello.version() != zapshare::v1::PROTOCOL_VERSION_1) {
         send_handshake_error(zapshare::v1::ERROR_CODE_BAD_PACKET,
                              "Unsupported protocol version");
-        m_state = ConnectionState::Closed;
+        setState(ConnectionState::Closed);
         return;
     }
 
     if (hello.token().empty()) {
         send_handshake_error(zapshare::v1::ERROR_CODE_INVALID_TOKEN,
                              "Missing Token!");
-        m_state = ConnectionState::Closed;
+        setState(ConnectionState::Closed);
         return;
     }
 
     if (!validate_token(hello.token())) {
         send_handshake_error(zapshare::v1::ERROR_CODE_INVALID_TOKEN,
                              "Invalid Token");
-        m_state = ConnectionState::Closed;
+        setState(ConnectionState::Closed);
         return;
     }
 
     if (!validate_client_hello(hello)) {
         send_handshake_error(zapshare::v1::ERROR_CODE_UNAUTHORIZED_PEER,
                              "Invalid Packet!");
-        m_state = ConnectionState::Closed;
+        setState(ConnectionState::Closed);
         return;
     }
 
-    m_state = ConnectionState::Authenticated;
+    setState(ConnectionState::Authenticated);
     zapshare::v1::HandshakePacket response;
     auto* server_hello = response.mutable_server_hello();
     server_hello->set_version(zapshare::v1::PROTOCOL_VERSION_1);
@@ -196,7 +200,8 @@ void Session::handle_handshake_packet(const std::string& data) {
 }
 
 void Session::handle_get_request(const zapshare::v1::GetRequest& get) {
-    if (m_state == ConnectionState::Authenticated) {
+    const auto state = getState();
+    if (state == ConnectionState::Authenticated) {
         m_file_id = m_transfer_metadata.id.empty()
                         ? m_transfer_metadata.file_name
                         : m_transfer_metadata.id;
@@ -205,23 +210,24 @@ void Session::handle_get_request(const zapshare::v1::GetRequest& get) {
             send_control_error(get.transfer_id(),
                                zapshare::v1::ERROR_CODE_TRANSFER_NOT_FOUND,
                                "Failed to open file");
-            m_state = ConnectionState::Closed;
+            setState(ConnectionState::Closed);
             return;
         }
         std::cout << "Starting the UDP transfer...." << std::endl;
-        m_state = ConnectionState::Transferring;
+        setState(ConnectionState::Transferring);
         send_next_chunk();
         return;
     }
 
-    if (m_state == ConnectionState::Transferring) {
+    if (state == ConnectionState::Transferring) {
         resend_current_chunk();
         return;
     }
 }
 
 void Session::handle_ack(const zapshare::v1::Ack& ack) {
-    if (m_state != ConnectionState::Transferring) {
+    auto state = getState();
+    if (state != ConnectionState::Transferring) {
         return;
     }
 
@@ -231,7 +237,7 @@ void Session::handle_ack(const zapshare::v1::Ack& ack) {
     if (ack_offset == expected_offset) {
         if (m_last_chunk_done) {
             std::cout << "Final ACK received. Transfer complete" << std::endl;
-            m_state = ConnectionState::Closed;
+            setState(ConnectionState::Closed);
         } else {
             m_offset = expected_offset;
             send_next_chunk();
@@ -244,7 +250,12 @@ void Session::handle_ack(const zapshare::v1::Ack& ack) {
 void Session::handle_control_packet(const std::string& data) {
     zapshare::v1::ControlPacket packet;
 
-    if (!packet.ParseFromString(data)) {
+    std::string decrypted_control{};
+    if (!m_session_crypto.decrypt_incoming(data, &decrypted_control)) {
+        return;
+    }
+
+    if (!packet.ParseFromString(decrypted_control)) {
         return;
     }
 
@@ -259,20 +270,18 @@ void Session::handle_control_packet(const std::string& data) {
     }
 
     if (packet.has_error()) {
-        m_state = ConnectionState::Closed;
+        setState(ConnectionState::Closed);
         return;
     }
 }
 
-void Session::send_message(const std::string& msg) {
-    m_socket.send_to(asio::buffer(msg), m_remote_endpoint);
-}
+void Session::send_raw_bytes(const std::string& msg) { m_sendBytes(msg); }
 
 void Session::resend_current_chunk() {
     if (m_last_packet_cache.empty()) {
         send_next_chunk();
     } else {
-        m_socket.send_to(asio::buffer(m_last_packet_cache), m_remote_endpoint);
+        m_sendBytes(m_last_packet_cache);
     }
 }
 
@@ -291,8 +300,9 @@ void Session::send_next_chunk() {
         done->set_file_hash(m_transfer_metadata.file_hash);
         std::string bytes;
         done_packet.SerializeToString(&bytes);
-        send_message(bytes);
-        m_last_packet_cache = bytes;
+        std::string encrypted_bytes = m_session_crypto.encrypt_outgoing(bytes);
+        send_raw_bytes(encrypted_bytes);
+        m_last_packet_cache = encrypted_bytes;
         m_last_chunk_done = true;
         m_last_chunk_size = 0;
         std::cout << "Sent DONE." << std::endl;
@@ -310,9 +320,10 @@ void Session::send_next_chunk() {
 
     std::string bytes;
     data_packet.SerializeToString(&bytes);
+    std::string encrypted_bytes = m_session_crypto.encrypt_outgoing(bytes);
 
-    m_last_packet_cache = bytes;  // Cache for retransmission
-    m_socket.send_to(asio::buffer(bytes), m_remote_endpoint);
+    m_last_packet_cache = encrypted_bytes;  // Cache for retransmission
+    send_raw_bytes(encrypted_bytes);
 }
 
 bool Session::validate_token(const std::string& token) {
@@ -321,5 +332,23 @@ bool Session::validate_token(const std::string& token) {
         return true;
     } catch (...) {
         return false;
+    }
+}
+
+Session::ConnectionState Session::getState() const {
+    return m_state.load(std::memory_order_acquire);
+}
+
+void Session::setState(ConnectionState state) {
+    m_state.store(state, std::memory_order_release);
+    m_state.notify_all();
+}
+
+void Session::waitUntilClosed() const {
+    auto current = getState();
+
+    while (current != ConnectionState::Closed) {
+        m_state.wait(current, std::memory_order_acquire);
+        current = getState();
     }
 }
