@@ -35,4 +35,4 @@ typedef struct Transfer_Metadata {
     size_t file_size;
     std::string file_hash;
     std::string token;
-} TRANSFERS;
+} Transfer_t;

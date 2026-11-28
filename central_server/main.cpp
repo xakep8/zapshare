@@ -1,13 +1,23 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 
+#include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
+#include <optional>
 #include <thread>
+#include <unordered_map>
 
 #include "database.hpp"
-#include "net/httplib.h"
 #include "json/json.hpp"
+#include "net/httplib.h"
 
 using json = nlohmann::json;
+
+typedef struct {
+    std::optional<json> offer;
+    std::optional<json> answer;
+} TransferSession;
 
 int main() {
     DB::init();
@@ -65,7 +75,7 @@ int main() {
     svr.Get(R"(/getfile/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
         std::string secret = req.matches[1];
         try {
-            DB::TransferRow row = DB::get_transfers_metadata(secret);
+            DB::TransferRow row = DB::get_Transfer_t_metadata(secret);
             std::string data = DB::transfer_row_to_json(row).dump();
             res.set_content(data, "application/json");
             res.status = httplib::StatusCode::OK_200;
@@ -77,7 +87,7 @@ int main() {
     svr.Post("/register", [](const httplib::Request& req, httplib::Response& res) {
         try {
             json data = json::parse(req.body);
-            DB::register_transfers(data);
+            DB::register_Transfer_t(data);
             res.status = httplib::StatusCode::Created_201;
         } catch (std::exception& e) {
             std::cerr << "Error: " << e.what() << "\n";
@@ -88,32 +98,87 @@ int main() {
     // Note: In a production environment, this should probably be in the database or Redis
     // using a static map for simplicity here as DB schema update wasn't requested in plan
     static std::mutex signal_mutex;
-    static std::map<std::string, json> signal_store;
+    static std::condition_variable signal_cv;
+    static std::unordered_map<std::string, TransferSession> signal_store;
 
-    svr.Post(R"(/signal/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Post(R"(/signal/([A-Za-z0-9\-]+)/offer)", [](const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches[1];
         try {
-            json data = json::parse(req.body);
+            json offer = json::parse(req.body);
             {
                 std::lock_guard<std::mutex> lock(signal_mutex);
-                signal_store[id] = data;
+                signal_store[id].offer = offer;
             }
-            std::cout << "Signal received for " << id << ": " << data.dump() << std::endl;
+            signal_cv.notify_all();
+            std::cout << offer.dump() << "\n";
             res.status = httplib::StatusCode::OK_200;
+        } catch (std::exception& e) {
+            std::cerr << e.what();
+            res.status = httplib::StatusCode::BadRequest_400;
+        };
+    });
+
+    svr.Get(R"(/signal/([A-Za-z0-9\-]+)/offer)", [](const httplib::Request& req, httplib::Response& res) {
+        std::string id = req.matches[1];
+        try {
+            std::unique_lock<std::mutex> lock(signal_mutex);
+            const bool ready = signal_cv.wait_for(
+                lock, std::chrono::seconds(15), [&]() {
+                    auto it = signal_store.find(id);
+                    return it != signal_store.end() && it->second.offer.has_value();
+                });
+            if (!ready) {
+                res.status = httplib::StatusCode::NoContent_204;
+            } else {
+                res.set_content(signal_store.at(id).offer->dump(),
+                                "application/json");
+                res.status = httplib::StatusCode::OK_200;
+            }
+        } catch (std::exception& e) {
+            std::cerr << e.what();
+            res.status = httplib::StatusCode::BadRequest_400;
+        }
+    });
+
+    svr.Post(R"(/signal/([A-Za-z0-9\-]+)/answer)", [](const httplib::Request& req, httplib::Response& res) {
+        std::string id = req.matches[1];
+        try {
+            json answer = json::parse(req.body);
+            bool stored = false;
+            {
+                std::lock_guard<std::mutex> lock(signal_mutex);
+                auto it = signal_store.find(id);
+                if (it != signal_store.end() && it->second.offer.has_value()) {
+                    it->second.answer = answer;
+                    stored = true;
+                }
+            }
+            if (stored) {
+                signal_cv.notify_all();
+                res.status = httplib::StatusCode::OK_200;
+            } else {
+                res.status = httplib::StatusCode::NotFound_404;
+            }
         } catch (std::exception& e) {
             std::cerr << "Error parsing signal: " << e.what() << "\n";
             res.status = httplib::StatusCode::BadRequest_400;
         }
     });
 
-    svr.Get(R"(/signal/([A-Za-z0-9\-]+))", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get(R"(/signal/([A-Za-z0-9\-]+)/answer)", [](const httplib::Request& req, httplib::Response& res) {
         std::string id = req.matches[1];
-        std::lock_guard<std::mutex> lock(signal_mutex);
-        if (signal_store.count(id)) {
-            res.set_content(signal_store[id].dump(), "application/json");
-        } else {
-            res.status = httplib::StatusCode::NotFound_404;
+        std::unique_lock<std::mutex> lock(signal_mutex);
+        const bool ready = signal_cv.wait_for(
+            lock, std::chrono::seconds(15), [&]() {
+                auto it = signal_store.find(id);
+                return it != signal_store.end() && it->second.answer.has_value();
+            });
+        if (!ready) {
+            res.status = httplib::StatusCode::NoContent_204;
+            return;
         }
+        res.set_content(signal_store.at(id).answer->dump(), "application/json");
+        res.status = httplib::StatusCode::OK_200;
     });
 
     svr.Get("/health", [](const httplib::Request& req, httplib::Response& res) {
