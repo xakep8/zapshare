@@ -1,6 +1,7 @@
 #include "client.hpp"
 
 #include <asio.hpp>
+#include <atomic>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -485,6 +486,14 @@ Client::State Client::getState() const {
 void Client::setState(State state) {
     m_state.store(state, std::memory_order_release);
     m_state.notify_all();
+}
+
+void Client::waitUntilClosed() const {
+    auto current = getState();
+    while (current != State::Closed) {
+        m_state.wait(current, std::memory_order_acquire);
+        current = getState();
+    }
 }
 
 void Client::start() {

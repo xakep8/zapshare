@@ -29,49 +29,37 @@ int handle_get(const int argc, char* argv[]) {
         Error::invalid_secret();
         return 1;
     }
-    P2pConnection::Receiver rcvr;
+    // Need to wire Client class here and cleanup the old code.
+    P2pConnection::Receiver receiver;
     const std::string secret = argv[2];
-    rcvr.onBytes([&rcvr](std::string bytes) {
-        std::cout << "Message: " << bytes << "\n";
-        if (bytes == "hello") {
-            rcvr.setState(P2pConnection::Receiver::State::MessageReceived);
-        } else {
-            rcvr.setState(P2pConnection::Receiver::State::Failed);
-        }
-    });
-    rcvr.start(secret);
+    Transfer_t transferMetadata = Utils::get_transfer_metadata(secret);
+    auto client = std::make_shared<Client>(
+        secret, transferMetadata.file_name,
+        [&receiver](std::string_view data) { receiver.sendBytes(data); });
 
-    while (true) {
-        const auto state = rcvr.getState();
-        switch (state) {
-            case P2pConnection::Receiver::State::WaitingOffer: {
-                try {
-                    auto offer = Utils::get_offer(secret);
-                    if (offer) {
-                        std::cout << "Offer received; preparing answer\n";
-                        rcvr.acceptOffer(*offer);
-                    }
-                } catch (const std::exception& error) {
-                    std::cerr << "Failed to fetch offer: " << error.what()
-                              << "\n";
-                    return 1;
-                }
-                break;
+    receiver.onBytes(
+        [weak_client = std::weak_ptr<Client>(client)](std::string bytes) {
+            if (auto client = weak_client.lock()) {
+                client->handle_packet(bytes);
             }
-            case P2pConnection::Receiver::State::OfferReceived:
-            case P2pConnection::Receiver::State::PreparingAnswer:
-            case P2pConnection::Receiver::State::AnswerSent:
-            case P2pConnection::Receiver::State::DCOpen:
-                rcvr.waitForStateChange(state);
-                break;
-            case P2pConnection::Receiver::State::MessageReceived:
-                std::cout << "Receiver got hello successfully\n";
-                return 0;
-            case P2pConnection::Receiver::State::Failed:
-                std::cerr << "Receiver connection failed\n";
-                return 1;
+        });
+    receiver.start(secret);
+    while (receiver.getState() ==
+           P2pConnection::Receiver::State::WaitingOffer) {
+        auto offer = Utils::get_offer(secret);
+        if (offer) {
+            receiver.acceptOffer(*offer);
+            break;
         }
     }
+
+    if (!receiver.waitUntil(P2pConnection::Receiver::State::DCOpen)) {
+        std::cerr << "Receiver connection failed\n";
+        return 1;
+    }
+
+    client->start();
+    client->waitUntilClosed();
 }
 
 int handle_send(const int argc, char* argv[]) {
@@ -84,6 +72,8 @@ int handle_send(const int argc, char* argv[]) {
         Error::invalid_file_path();
         return 1;
     }
+    // TODO: cleanup this function to make it lean, it doesn't need all the old
+    // things now.
     Transfer_t transfer{};
     transfer.file_name = std::filesystem::path(filepath).filename().string();
     transfer.file_hash = Crypto::compute_file_hash(filepath);
